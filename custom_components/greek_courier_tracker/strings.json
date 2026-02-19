@@ -1,0 +1,33 @@
+{
+  "title": "Greek Courier Tracker",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Greek Courier Tracker",
+        "description": "Enter tracking numbers separated by commas or new lines.",
+        "data": {
+          "tracking_numbers": "Tracking numbers",
+          "scan_interval": "Scan interval (minutes)"
+        }
+      }
+    },
+    "error": {
+      "no_tracking_numbers": "Please provide at least one tracking number."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Greek Courier Tracker Options",
+        "description": "Update tracking numbers and scan interval.",
+        "data": {
+          "tracking_numbers": "Tracking numbers",
+          "scan_interval": "Scan interval (minutes)"
+        }
+      }
+    },
+    "error": {
+      "no_tracking_numbers": "Please provide at least one tracking number."
+    }
+  }
+}

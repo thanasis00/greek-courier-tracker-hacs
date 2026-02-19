@@ -1,0 +1,9 @@
+{
+  "name": "Greek Courier Tracker",
+  "content_in_root": false,
+  "render_readme": true,
+  "zip_release": "greek_courier_tracker.zip",
+  "filename": "custom_components/greek_courier_tracker",
+  "country": "GR",
+  "homeassistant": "2023.1.0"
+}
