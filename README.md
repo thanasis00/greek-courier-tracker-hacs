@@ -10,7 +10,7 @@ A comprehensive Home Assistant integration for tracking shipments from **all maj
 
 | Courier | Tracking Format | API Type | Status |
 |---------|----------------|----------|--------|
-| **ELTA Courier** | SE101046219GR | JSON API | ✅ Working |
+| **ELTA Courier** | XX123456789GR | JSON API | ✅ Working |
 | **ACS Courier** | 1234567890 (10 digits) | JSON API | ✅ Working |
 | **SpeedEx** | SP12345678, 12 digits | HTML Scraping | ✅ Working |
 | **Box Now** | BN12345678 | JSON API | ✅ Working |
@@ -63,7 +63,7 @@ Restart Home Assistant.
 ```yaml
 greek_courier_tracker:
   tracking_numbers:
-    - SE101046219GR    # ELTA
+    - XX123456789GR    # ELTA
     - 1234567890       # ACS
     - SP12345678       # SpeedEx
     - BN12345678       # Box Now
@@ -74,9 +74,8 @@ greek_courier_tracker:
 
 | Courier | Format | Example |
 |---------|--------|---------|
-| ELTA | `SE` + 9 digits + `GR` | SE101046219GR |
-| ELTA | `EL` + 9 digits + `GR` | EL123456789GR |
-| ACS | 10 digits | 1234567890 |
+| ELTA | 2 letters + 9 digits + `GR` | XX123456789GR |
+| ELTA | `EL` + 9 digits + `GR` | EL123456789GR || ELTA | `PW` + 9 digits + `GR` | PW253118245GR || ACS | 10 digits | 1234567890 |
 | SpeedEx | `SP` + 8-10 digits | SP12345678 |
 | SpeedEx | 12 digits | 123456789012 |
 | Box Now | `BN` + 8-10 digits | BN12345678 |
@@ -116,7 +115,7 @@ Each tracking number creates a sensor with:
 type: custom:greek-courier-card
 title: "My Shipments"
 entities:
-  - sensor.elta_se101046219gr
+  - sensor.elta_xx123456789gr
   - sensor.acs_1234567890
 showAllEvents: true
 showCourierLogo: true
@@ -131,7 +130,7 @@ automation:
   - alias: "Package Delivered"
     trigger:
       - platform: state
-        entity_id: sensor.elta_se101046219gr
+        entity_id: sensor.elta_xx123456789gr
         attribute: delivered
         to: true
     action:
@@ -149,7 +148,7 @@ automation:
     trigger:
       - platform: state
         entity_id: 
-          - sensor.elta_se101046219gr
+          - sensor.elta_xx123456789gr
           - sensor.acs_1234567890
     action:
       - service: notify.mobile_app

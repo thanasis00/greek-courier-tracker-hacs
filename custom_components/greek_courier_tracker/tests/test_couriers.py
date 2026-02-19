@@ -26,8 +26,8 @@ class TestTrackingNumberDetection:
     
     def test_elta_detection(self):
         """Test ELTA tracking number detection."""
-        assert ELTACourier.matches_tracking_number("SE101046219GR") is True
-        assert ELTACourier.matches_tracking_number("EL123456789GR") is True
+        assert ELTACourier.matches_tracking_number("XX123456789GR") is True
+        assert ELTACourier.matches_tracking_number("YY987654321GR") is True
         assert ELTACourier.matches_tracking_number("GR123456789GR") is True
         assert ELTACourier.matches_tracking_number("1234567890") is False
     
@@ -36,7 +36,7 @@ class TestTrackingNumberDetection:
         assert ACSCourier.matches_tracking_number("1234567890") is True
         assert ACSCourier.matches_tracking_number("123456789") is False  # 9 digits
         assert ACSCourier.matches_tracking_number("12345678901") is False  # 11 digits
-        assert ACSCourier.matches_tracking_number("SE101046219GR") is False
+        assert ACSCourier.matches_tracking_number("XX123456789GR") is False
     
     def test_speedex_detection(self):
         """Test SpeedEx tracking number detection."""
@@ -44,7 +44,7 @@ class TestTrackingNumberDetection:
         assert SpeedExCourier.matches_tracking_number("SP123456789") is True
         assert SpeedExCourier.matches_tracking_number("123456789012") is True  # 12 digits
         assert SpeedExCourier.matches_tracking_number("123456789AB") is True  # 9 digits + 2 letters
-        assert SpeedExCourier.matches_tracking_number("SE101046219GR") is False
+        assert SpeedExCourier.matches_tracking_number("XX123456789GR") is False
     
     def test_boxnow_detection(self):
         """Test Box Now tracking number detection."""
@@ -60,7 +60,7 @@ class TestTrackingNumberDetection:
     
     def test_auto_detection(self):
         """Test automatic courier detection."""
-        assert detect_courier("SE101046219GR") == "elta"
+        assert detect_courier("XX123456789GR") == "elta"
         assert detect_courier("BN12345678") == "box_now"
         assert detect_courier("CC12345678") == "courier_center"
         assert detect_courier("SP12345678") == "speedex"
@@ -74,10 +74,10 @@ class TestELTATracking:
     async def test_elta_track_real_number(self):
         """Test tracking a real ELTA shipment."""
         courier = ELTACourier()
-        result = await courier.track("SE101046219GR")
+        result = await courier.track("XX123456789GR")
         
         assert result.success is True
-        assert result.tracking_number == "SE101046219GR"
+        assert result.tracking_number == "XX123456789GR"
         assert result.courier == "elta"
         assert len(result.events) > 0
         assert result.latest_event is not None

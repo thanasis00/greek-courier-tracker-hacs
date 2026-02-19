@@ -22,11 +22,10 @@ class ELTACourier(BaseCourier):
     BASE_URL = "https://www.elta-courier.gr"
     
     # Tracking number patterns
+    # ELTA uses various 2-letter prefixes (SE, EL, PW, etc.) + 9 digits + GR
     PATTERNS = [
-        r"^SE\d{9}GR$",      # SE101046219GR
-        r"^EL\d{9}GR$",
-        r"^GR\d{9}[A-Z]{2}$",
-        r"^[A-Z]{2}\d{9}GR$",
+        r"^[A-Z]{2}\d{9}GR$",      # XX123456789GR (SE, EL, PW, etc.)
+        r"^GR\d{9}[A-Z]{2}$",      # GR123456789XX (international)
     ]
     
     # Status translations
@@ -79,7 +78,11 @@ class ELTACourier(BaseCourier):
                                 error_message=f"HTTP error: {response.status}",
                             )
                         
-                        result = await response.json()
+                        # ELTA API returns JSON with wrong content-type (text/html)
+                        # Use text() then parse manually
+                        text = await response.text()
+                        import json
+                        result = json.loads(text)
                         return self._parse_response(tracking_number, result)
                         
         except aiohttp.ClientError as err:

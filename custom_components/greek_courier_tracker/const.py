@@ -39,12 +39,10 @@ COURIER_NAMES: Final[dict[str, str]] = {
 
 # Tracking number patterns for auto-detection
 TRACKING_PATTERNS: Final[dict[str, list[str]]] = {
-    # ELTA: SE/EL/GR followed by digits, ending with GR
+    # ELTA: Any 2 letters + 9 digits + GR (e.g., SE, EL, PW, etc.)
     CourierType.ELTA: [
-        r"^SE\d{9}GR$",      # SE101046219GR
-        r"^EL\d{9}GR$",      # EL...
-        r"^GR\d{9}[A-Z]{2}$",  # International
-        r"^[A-Z]{2}\d{9}GR$",  # Standard format
+        r"^[A-Z]{2}\d{9}GR$",      # XX123456789GR (SE, EL, PW, etc.)
+        r"^GR\d{9}[A-Z]{2}$",      # GR123456789XX (international)
     ],
     # ACS: 10 digits
     CourierType.ACS: [
