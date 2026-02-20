@@ -1,0 +1,97 @@
+name: Tests
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-asyncio pytest-cov pytest-homeassistant-custom-component beautifulsoup4
+          pip install aiohttp async-timeout
+
+      - name: Run tests with pytest
+        run: |
+          pytest tests/ \
+            --cov=custom_components/greek_courier_tracker \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --verbose \
+            -tb=short
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        if: matrix.python-version == '3.12'
+        with:
+          file: ./coverage.xml
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+
+  validate-with-hassfest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Hassfest validation
+        uses: action-pack/hassfest@master
+        with:
+          path: ./custom_components/greek_courier_tracker
+
+  hacs-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: HACS validation
+        uses: hacs/action@main
+        with:
+          category: integration
+          path: ./custom_components/greek_courier_tracker
+
+  linting:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff black mypy
+
+      - name: Run Ruff linter
+        run: |
+          ruff check custom_components/greek_courier_tracker/ tests/
+        continue-on-error: true
+
+      - name: Run Black format check
+        run: |
+          black --check custom_components/greek_courier_tracker/ tests/
+        continue-on-error: true
+
+      - name: Run MyPy type check
+        run: |
+          mypy custom_components/greek_courier_tracker/
+        continue-on-error: true

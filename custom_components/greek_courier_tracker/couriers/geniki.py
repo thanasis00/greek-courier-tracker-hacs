@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 import aiohttp
-import asyncio
+import async_timeout
 from bs4 import BeautifulSoup
 
 from ..const import CourierType
@@ -58,7 +58,7 @@ class GenikiCourier(BaseCourier):
         
         try:
             async with aiohttp.ClientSession() as session:
-                async with asyncio.timeout(30):
+                async with async_timeout.timeout(30):
                     async with session.get(url, headers=headers) as response:
                         if response.status != 200:
                             return TrackingResult(

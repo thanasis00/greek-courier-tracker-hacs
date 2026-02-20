@@ -1,0 +1,33 @@
+# Dockerfile for running Greek Courier Tracker tests
+# Uses GitHub Container Registry to avoid Docker Hub rate limits
+# Build context should be the project root (parent of tests/ directory)
+
+FROM ghcr.io/home-assistant/amd64-base-python:3.12-alpine3.19
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apk add --no-cache gcc musl-dev libffi-dev
+
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+    pytest==8.3.4 \
+    pytest-asyncio==0.24.0 \
+    pytest-cov==6.0.0 \
+    beautifulsoup4==4.12.3 \
+    aiohttp==3.11.11 \
+    async-timeout==4.0.3 \
+    homeassistant
+
+# Set PYTHONPATH to include the project root
+ENV PYTHONPATH=/app
+
+# Copy project files (build context is project root)
+COPY custom_components/ custom_components/
+COPY tests/ tests/
+COPY tests/pytest.ini .
+
+# Set the entrypoint to run tests
+ENTRYPOINT ["pytest"]
+CMD ["-v"]

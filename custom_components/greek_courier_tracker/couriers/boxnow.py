@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 import aiohttp
-import asyncio
+import async_timeout
 
 from ..const import CourierType
 from .base import BaseCourier, TrackingEvent, TrackingResult
@@ -62,7 +62,7 @@ class BoxNowCourier(BaseCourier):
         
         try:
             async with aiohttp.ClientSession() as session:
-                async with asyncio.timeout(30):
+                async with async_timeout.timeout(30):
                     async with session.post(
                         self.API_URL,
                         json={"parcelId": tracking_number},

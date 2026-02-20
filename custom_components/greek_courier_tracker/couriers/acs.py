@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 import aiohttp
-import asyncio
+import async_timeout
 
 from ..const import CourierType
 from .base import BaseCourier, TrackingEvent, TrackingResult
@@ -58,7 +58,7 @@ class ACSCourier(BaseCourier):
         try:
             async with aiohttp.ClientSession() as session:
                 # Try the public API without token first
-                async with asyncio.timeout(30):
+                async with async_timeout.timeout(30):
                     url = self.API_URL.format(tracking_number=tracking_number)
                     async with session.get(url, headers=headers) as response:
                         if response.status == 200:

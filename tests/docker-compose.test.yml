@@ -1,0 +1,60 @@
+# Docker Compose for running tests
+
+services:
+  # Run tests with Python 3.10
+  test-py310:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+      args:
+        PYTHON_VERSION: "3.10"
+    image: greek-courier-tracker-test:3.10
+    container_name: gct-test-py310
+    volumes:
+      - ./custom_components:/app/custom_components:ro
+      - ./tests:/app/tests:ro
+      - ./pytest.ini:/app/pytest.ini:ro
+    command: pytest tests/ -v --tb=short --cov=custom_components/greek_courier_tracker --cov-report=term-missing
+
+  # Run tests with Python 3.11
+  test-py311:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    image: greek-courier-tracker-test:3.11
+    container_name: gct-test-py311
+    volumes:
+      - ./custom_components:/app/custom_components:ro
+      - ./tests:/app/tests:ro
+      - ./pytest.ini:/app/pytest.ini:ro
+    command: pytest tests/ -v --tb=short --cov=custom_components/greek_courier_tracker --cov-report=term-missing
+
+  # Run tests with Python 3.12
+  test-py312:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+      args:
+        PYTHON_VERSION: "3.12"
+    image: greek-courier-tracker-test:3.12
+    container_name: gct-test-py312
+    volumes:
+      - ./custom_components:/app/custom_components:ro
+      - ./tests:/app/tests:ro
+      - ./pytest.ini:/app/pytest.ini:ro
+    command: pytest tests/ -v --tb=short --cov=custom_components/greek_courier_tracker --cov-report=term-missing
+
+  # Interactive test shell
+  test-shell:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    image: greek-courier-tracker-test:shell
+    container_name: gct-test-shell
+    volumes:
+      - ./custom_components:/app/custom_components:ro
+      - ./tests:/app/tests:ro
+      - ./pytest.ini:/app/pytest.ini:ro
+    command: /bin/bash
+    stdin_open: true
+    tty: true
