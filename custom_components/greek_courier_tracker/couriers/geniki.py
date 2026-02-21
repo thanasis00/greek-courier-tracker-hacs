@@ -71,8 +71,11 @@ class GenikiCourier(BaseCourier):
                                 events=[],
                                 error_message=f"HTTP error: {response.status}",
                             )
-                        
+
                         html = await response.text()
+                        # Remove UTF-8 BOM if present
+                        if html.startswith('\ufeff'):
+                            html = html[1:]
                         return self._parse_html(tracking_number, html)
                         
         except aiohttp.ClientError as err:

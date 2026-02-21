@@ -79,9 +79,12 @@ class ELTACourier(BaseCourier):
                             )
                         
                         # ELTA API returns JSON with wrong content-type (text/html)
-                        # Use text() then parse manually
+                        # Use text() then parse manually, handling potential UTF-8 BOM
                         text = await response.text()
+                        # Remove UTF-8 BOM if present and parse JSON
                         import json
+                        if text.startswith('\ufeff'):
+                            text = text[1:]  # Remove BOM
                         result = json.loads(text)
                         return self._parse_response(tracking_number, result)
                         

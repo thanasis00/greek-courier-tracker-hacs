@@ -116,6 +116,9 @@ class ACSCourier(BaseCourier):
             ) as response:
                 if response.status == 200:
                     text = await response.text()
+                    # Remove UTF-8 BOM if present
+                    if text.startswith('\ufeff'):
+                        text = text[1:]
                     # Look for publicToken in the HTML
                     match = re.search(r'publicToken["\']?\s*[:=]\s*["\']([^"\']+)["\']', text)
                     if match:
