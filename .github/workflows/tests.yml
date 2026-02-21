@@ -34,8 +34,6 @@ jobs:
             --cov=custom_components/greek_courier_tracker \
             --cov-report=xml \
             --cov-report=term-missing \
-            --verbose \
-            -tb=short \
             -m "not live"
 
       - name: Upload coverage to Codecov
@@ -124,7 +122,7 @@ jobs:
             -v "$(pwd)/tests:/app/tests:ro" \
             -e PYTHONPATH=/app \
             greek-courier-tracker-test:latest \
-            python -m pytest -c /app/pytest.ini tests/ -v --tb=short -m "not live"
+            python -m pytest -c /app/pytest.ini tests/ -m "not live"
 
   test-live-api:
     name: Live API Tests (Python ${{ matrix.python-version }})
@@ -155,4 +153,4 @@ jobs:
 
       - name: Run live API tests
         run: |
-          pytest tests/ -v --tb=short -m "live" || true
+          pytest tests/ -m "live" || true
