@@ -115,16 +115,13 @@ jobs:
 
       - name: Build Docker image
         run: |
-          cd tests
-          docker build -f Dockerfile.test -t greek-courier-tracker-test:latest .
+          docker build -f tests/Dockerfile.test -t greek-courier-tracker-test:latest .
 
       - name: Run tests in Docker
         run: |
-          cd tests
           docker run --rm \
-            -v "$(pwd)/../custom_components:/app/custom_components:ro" \
-            -v "$(pwd):/app/tests:ro" \
-            -v "$(pwd)/pytest.ini:/app/pytest.ini:ro" \
+            -v "$(pwd)/custom_components:/app/custom_components:ro" \
+            -v "$(pwd)/tests:/app/tests:ro" \
             -e PYTHONPATH=/app \
             greek-courier-tracker-test:latest \
             pytest tests/ -v --tb=short -m "not live"
