@@ -124,7 +124,7 @@ jobs:
             -v "$(pwd)/tests:/app/tests:ro" \
             -e PYTHONPATH=/app \
             greek-courier-tracker-test:latest \
-            pytest tests/ -v --tb=short -m "not live"
+            python -m pytest -c /app/pytest.ini tests/ -v --tb=short -m "not live"
 
   test-live-api:
     name: Live API Tests (Python ${{ matrix.python-version }})

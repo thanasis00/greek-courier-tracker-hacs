@@ -28,6 +28,5 @@ COPY custom_components/ custom_components/
 COPY tests/ tests/
 COPY tests/pytest.ini /app/pytest.ini
 
-# Set the entrypoint to run tests
-ENTRYPOINT ["pytest"]
-CMD ["-v"]
+# Set default working directory for tests
+WORKDIR /app
