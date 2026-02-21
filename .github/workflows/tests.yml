@@ -53,7 +53,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Hassfest validation
-        uses: action-pack/hassfest@master
+        uses: home-assistant/actions/hassfest@master
         with:
           path: ./custom_components/greek_courier_tracker
 

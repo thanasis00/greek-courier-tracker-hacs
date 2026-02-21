@@ -26,7 +26,7 @@ ENV PYTHONPATH=/app
 # Copy project files (build context is project root)
 COPY custom_components/ custom_components/
 COPY tests/ tests/
-COPY tests/pytest.ini .
+COPY tests/pytest.ini /app/pytest.ini
 
 # Set the entrypoint to run tests
 ENTRYPOINT ["pytest"]
