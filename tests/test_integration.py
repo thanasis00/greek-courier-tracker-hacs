@@ -81,19 +81,21 @@ class TestCoordinator:
             GreekCourierDataUpdateCoordinator,
         )
 
-        mock_hass = MagicMock(spec=HomeAssistant)
+        # Create a simple mock hass object without spec to avoid frame issues
+        mock_hass = MagicMock()
         mock_hass.data = {}
+        # Add required attributes that DataUpdateCoordinator might need
+        mock_hass.config = MagicMock()
+        mock_hass.config.asynchronous_panel = False
 
-        # Mock the frame helper to avoid RuntimeError in newer HA versions
-        with patch("homeassistant.helpers.update_coordinator._report_external_update"):
-            coordinator = GreekCourierDataUpdateCoordinator(
-                hass=mock_hass,
-                tracking_numbers=["SE123456789GR", "BN12345678"],
-                scan_interval=30,
-            )
+        coordinator = GreekCourierDataUpdateCoordinator(
+            hass=mock_hass,
+            tracking_numbers=["SE123456789GR", "BN12345678"],
+            scan_interval=30,
+        )
 
-            assert coordinator.tracking_numbers == ["SE123456789GR", "BN12345678"]
-            assert coordinator.update_interval == timedelta(minutes=30)
+        assert coordinator.tracking_numbers == ["SE123456789GR", "BN12345678"]
+        assert coordinator.update_interval == timedelta(minutes=30)
 
     @pytest.mark.asyncio
     async def test_coordinator_empty_tracking_numbers(self):
@@ -102,20 +104,22 @@ class TestCoordinator:
             GreekCourierDataUpdateCoordinator,
         )
 
-        mock_hass = MagicMock(spec=HomeAssistant)
+        # Create a simple mock hass object without spec to avoid frame issues
+        mock_hass = MagicMock()
         mock_hass.data = {}
+        # Add required attributes that DataUpdateCoordinator might need
+        mock_hass.config = MagicMock()
+        mock_hass.config.asynchronous_panel = False
 
-        # Mock the frame helper to avoid RuntimeError in newer HA versions
-        with patch("homeassistant.helpers.update_coordinator._report_external_update"):
-            coordinator = GreekCourierDataUpdateCoordinator(
-                hass=mock_hass,
-                tracking_numbers=[],
-                scan_interval=30,
-            )
+        coordinator = GreekCourierDataUpdateCoordinator(
+            hass=mock_hass,
+            tracking_numbers=[],
+            scan_interval=30,
+        )
 
-            # Should return empty data
-            result = await coordinator._async_update_data()
-            assert result == {}
+        # Should return empty data
+        result = await coordinator._async_update_data()
+        assert result == {}
 
 
 class TestSensorEntity:
