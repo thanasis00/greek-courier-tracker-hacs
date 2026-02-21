@@ -82,9 +82,10 @@ class TestCoordinator:
         )
 
         mock_hass = MagicMock(spec=HomeAssistant)
+        mock_hass.data = {}
 
         # Mock the frame helper to avoid RuntimeError in newer HA versions
-        with patch("homeassistant.helpers.frame.report_usage"):
+        with patch("homeassistant.helpers.update_coordinator._report_external_update"):
             coordinator = GreekCourierDataUpdateCoordinator(
                 hass=mock_hass,
                 tracking_numbers=["SE123456789GR", "BN12345678"],
@@ -102,9 +103,10 @@ class TestCoordinator:
         )
 
         mock_hass = MagicMock(spec=HomeAssistant)
+        mock_hass.data = {}
 
         # Mock the frame helper to avoid RuntimeError in newer HA versions
-        with patch("homeassistant.helpers.frame.report_usage"):
+        with patch("homeassistant.helpers.update_coordinator._report_external_update"):
             coordinator = GreekCourierDataUpdateCoordinator(
                 hass=mock_hass,
                 tracking_numbers=[],
