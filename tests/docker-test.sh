@@ -21,6 +21,24 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$SCRIPT_DIR"
 
+# Track containers for cleanup
+CONTAINERS_TO_CLEAN=""
+
+# Cleanup function
+cleanup() {
+    local exit_code=$?
+    if [ -n "$CONTAINERS_TO_CLEAN" ]; then
+        echo -e "${YELLOW}Cleaning up containers...${NC}"
+        for container in $CONTAINERS_TO_CLEAN; do
+            docker rm -f "$container" 2>/dev/null || true
+        done
+    fi
+    exit $exit_code
+}
+
+# Set trap to ensure cleanup on exit
+trap cleanup EXIT INT TERM
+
 # Check if Docker is installed
 if ! command -v docker &> /dev/null; then
     echo -e "${RED}Error: Docker is not installed${NC}"
@@ -137,3 +155,6 @@ fi
 
 echo ""
 echo -e "${GREEN}✓ Tests completed!${NC}"
+echo ""
+echo -e "${YELLOW}Cleaning up any test containers...${NC}"
+docker ps -a --filter "name=gct-test" --format "{{.Names}}" | xargs -r docker rm -f 2>/dev/null || true
