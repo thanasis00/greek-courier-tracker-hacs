@@ -239,15 +239,21 @@ class GreekCourierTrackerOptionsFlow(config_entries.OptionsFlow):
     """Handle options flow for Greek Courier Tracker."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        self.config_entry = config_entry
+        super().__init__()
+        self._config_entry = config_entry
         _LOGGER.debug("Options flow initialized for entry: %s", config_entry.entry_id)
 
         # Migrate old data format
         self._migrate_data_if_needed()
 
+    @property
+    def config_entry(self) -> config_entries.ConfigEntry:
+        """Return the config entry."""
+        return self._config_entry
+
     def _migrate_data_if_needed(self) -> None:
         """Migrate old tracking number format to include courier field."""
-        existing_numbers = self.config_entry.options.get(
+        existing_numbers = self._config_entry.options.get(
             CONF_TRACKING_NUMBERS,
             self.config_entry.data.get(CONF_TRACKING_NUMBERS, []),
         )
