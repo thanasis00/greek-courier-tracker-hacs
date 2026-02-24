@@ -10,7 +10,11 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import (
+    CONF_TRACKING_NUMBERS,
+    CONF_TRACKING_NAME,
+    DOMAIN,
+)
 from .couriers.base import TrackingEvent, TrackingResult
 from . import GreekCourierDataUpdateCoordinator
 
@@ -22,11 +26,43 @@ async def async_setup_entry(
 ) -> None:
     """Set up sensors for each tracking number."""
     coordinator: GreekCourierDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
+
+    # Get tracking data with names
+    tracking_data = _get_tracking_data(entry)
+
     sensors = [
-        GreekCourierTrackingSensor(coordinator, entry, tracking_number)
-        for tracking_number in coordinator.tracking_numbers
+        GreekCourierTrackingSensor(
+            coordinator,
+            entry,
+            tracking_number=item.get("tracking_number", item) if isinstance(item, dict) else item,
+            tracking_name=item.get("name", item) if isinstance(item, dict) else item,
+            stop_tracking_delivered=item.get("stop_tracking_delivered", False) if isinstance(item, dict) else False,
+        )
+        for item in tracking_data
     ]
     async_add_entities(sensors)
+
+
+def _get_tracking_data(entry: ConfigEntry) -> list:
+    """Get tracking data from entry data or options."""
+    # Try options first (where updates are stored), then data
+    tracking_data = entry.options.get(
+        CONF_TRACKING_NUMBERS,
+        entry.data.get(CONF_TRACKING_NUMBERS, [])
+    )
+
+    # Migrate old format (list of strings) to new format (list of dicts)
+    if tracking_data and isinstance(tracking_data[0], str):
+        return [
+            {
+                "tracking_number": number,
+                "name": number,
+                "stop_tracking_delivered": False,
+            }
+            for number in tracking_data
+        ]
+
+    return tracking_data
 
 
 class GreekCourierTrackingSensor(CoordinatorEntity, SensorEntity):
@@ -37,12 +73,20 @@ class GreekCourierTrackingSensor(CoordinatorEntity, SensorEntity):
         coordinator: GreekCourierDataUpdateCoordinator,
         entry: ConfigEntry,
         tracking_number: str,
+        tracking_name: str,
+        stop_tracking_delivered: bool = False,
     ) -> None:
         super().__init__(coordinator)
         self._entry = entry
         self._tracking_number = tracking_number
+        self._tracking_name = tracking_name
+        self._stop_tracking_delivered = stop_tracking_delivered
         self._attr_unique_id = f"{entry.entry_id}_{tracking_number}"
-        self._attr_name = f"{entry.title} {tracking_number}"
+        # Use the custom name as the entity name
+        self._attr_name = tracking_name
+        # Set entity_id with greek_courier_tracker prefix
+        self._attr_has_entity_name = True
+        self.entity_id = f"sensor.greek_courier_tracker_{tracking_number.lower()}"
 
     @property
     def native_value(self) -> str | None:
@@ -50,12 +94,22 @@ class GreekCourierTrackingSensor(CoordinatorEntity, SensorEntity):
         result = self._get_result()
         if result is None:
             return None
+
+        # Check if we should stop tracking (delivered and stop_tracking_delivered is True)
+        if self._stop_tracking_delivered and result.status_category == "delivered":
+            return f"Delivered - Tracking Stopped"
+
         return result.status
 
     @property
     def available(self) -> bool:
         """Return if entity is available."""
         result = self._get_result()
+
+        # If stop_tracking_delivered is enabled and package is delivered, mark unavailable
+        if self._stop_tracking_delivered and result and result.status_category == "delivered":
+            return False
+
         return result is not None
 
     @property
@@ -77,6 +131,8 @@ class GreekCourierTrackingSensor(CoordinatorEntity, SensorEntity):
             "latest_place": latest.location if latest else None,
             "events": _serialize_events(result.events),
             "delivered": result.status_category == "delivered",
+            "stop_tracking_delivered": self._stop_tracking_delivered,
+            "tracking_stopped": self._stop_tracking_delivered and result.status_category == "delivered",
             "error_message": result.error_message,
         }
 
@@ -89,6 +145,11 @@ class GreekCourierTrackingSensor(CoordinatorEntity, SensorEntity):
             manufacturer="Greek Courier Tracker",
             model="Greek Courier Tracker",
         )
+
+    @property
+    def entity_registry_enabled_default(self) -> bool:
+        """Return if the entity should be enabled when first added."""
+        return True
 
     def _get_result(self) -> TrackingResult | None:
         data = self.coordinator.data or {}

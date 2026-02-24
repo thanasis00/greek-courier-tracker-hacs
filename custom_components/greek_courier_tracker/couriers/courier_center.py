@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 import aiohttp
-import asyncio
+import async_timeout
 from bs4 import BeautifulSoup
 
 from ..const import CourierType
@@ -23,10 +23,9 @@ class CourierCenterCourier(BaseCourier):
     
     # Tracking number patterns
     PATTERNS = [
-        r"^CC\d{8,10}$",   # CC prefix + digits
-        r"^\d{10,12}$",    # 10-12 digits
+        r"^\d{10,12}$",    # 10-12 digits (Courier Center format)
     ]
-    
+
     # Status translations
     STATUS_TRANSLATIONS = {
         "DeliveryCompleted": "Delivered",
@@ -34,16 +33,7 @@ class CourierCenterCourier(BaseCourier):
         "Received": "Received",
         "OutForDelivery": "Out for Delivery",
     }
-    
-    @classmethod
-    def matches_tracking_number(cls, tracking_number: str) -> bool:
-        """Check if tracking number matches Courier Center format."""
-        tn = tracking_number.strip().upper()
-        # CC prefix is definitive for Courier Center
-        if re.match(r"^CC\d{8,10}$", tn):
-            return True
-        return False
-    
+
     async def track(self, tracking_number: str) -> TrackingResult:
         """Track a Courier Center shipment."""
         tracking_number = tracking_number.strip().upper()
@@ -56,7 +46,7 @@ class CourierCenterCourier(BaseCourier):
         
         try:
             async with aiohttp.ClientSession() as session:
-                async with asyncio.timeout(30):
+                async with async_timeout.timeout(30):
                     async with session.get(
                         self.TRACKING_URL,
                         params=params,
@@ -73,8 +63,11 @@ class CourierCenterCourier(BaseCourier):
                                 events=[],
                                 error_message=f"HTTP error: {response.status}",
                             )
-                        
+
                         html = await response.text()
+                        # Remove UTF-8 BOM if present
+                        if html.startswith('\ufeff'):
+                            html = html[1:]
                         return self._parse_html(tracking_number, html)
                         
         except aiohttp.ClientError as err:

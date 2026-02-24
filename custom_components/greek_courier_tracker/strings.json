@@ -4,10 +4,12 @@
     "step": {
       "user": {
         "title": "Greek Courier Tracker",
-        "description": "Enter tracking numbers separated by commas or new lines.",
+        "description": "Add your first tracking number. You can add more later in the integration settings.",
         "data": {
-          "tracking_numbers": "Tracking numbers",
-          "scan_interval": "Scan interval (minutes)"
+          "tracking_numbers": "Tracking number",
+          "tracking_name": "Name (optional)",
+          "courier": "Courier provider",
+          "scan_interval": "Scan interval (hours)"
         }
       }
     },
@@ -19,15 +21,42 @@
     "step": {
       "init": {
         "title": "Greek Courier Tracker Options",
-        "description": "Update tracking numbers and scan interval.",
+        "description": "Manage your tracking numbers below.",
         "data": {
-          "tracking_numbers": "Tracking numbers",
-          "scan_interval": "Scan interval (minutes)"
+          "scan_interval": "Scan interval (hours)"
+        }
+      },
+      "add_tracking": {
+        "title": "Add Tracking Number",
+        "description": "Enter a new tracking number to track.",
+        "data": {
+          "tracking_number": "Tracking number",
+          "name": "Name (optional)",
+          "courier": "Courier",
+          "stop_tracking_delivered": "Stop tracking when delivered"
+        }
+      },
+      "edit_tracking": {
+        "title": "Edit Tracking Number",
+        "description": "Edit tracking number: {tracking_number}",
+        "data": {
+          "name": "Name",
+          "courier": "Courier",
+          "stop_tracking_delivered": "Stop tracking when delivered"
+        }
+      },
+      "confirm_delete": {
+        "title": "Delete Tracking Number",
+        "description": "Are you sure you want to delete tracking number {tracking_number} ({name})?",
+        "data": {
+          "confirm_delete": "Confirm deletion"
         }
       }
     },
     "error": {
-      "no_tracking_numbers": "Please provide at least one tracking number."
+      "no_tracking_numbers": "Please provide at least one tracking number.",
+      "tracking_number_required": "Tracking number is required.",
+      "tracking_number_exists": "This tracking number already exists."
     }
   }
 }

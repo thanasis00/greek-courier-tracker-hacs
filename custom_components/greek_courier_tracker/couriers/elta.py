@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 import aiohttp
-import asyncio
+import async_timeout
 
 from ..const import CourierType
 from .base import BaseCourier, TrackingEvent, TrackingResult
@@ -22,11 +22,10 @@ class ELTACourier(BaseCourier):
     BASE_URL = "https://www.elta-courier.gr"
     
     # Tracking number patterns
+    # ELTA uses various 2-letter prefixes (SE, EL, PW, etc.) + 9 digits + GR
     PATTERNS = [
-        r"^SE\d{9}GR$",      # SE101046219GR
-        r"^EL\d{9}GR$",
-        r"^GR\d{9}[A-Z]{2}$",
-        r"^[A-Z]{2}\d{9}GR$",
+        r"^[A-Z]{2}\d{9}GR$",      # XX123456789GR (SE, EL, PW, etc.)
+        r"^GR\d{9}[A-Z]{2}$",      # GR123456789XX (international)
     ]
     
     # Status translations
@@ -37,16 +36,7 @@ class ELTACourier(BaseCourier):
         "Δημιουργία ΣΥ.ΔΕ.ΤΑ.": "Shipment Created",
         "Παραλαβή από": "Picked up by",
     }
-    
-    @classmethod
-    def matches_tracking_number(cls, tracking_number: str) -> bool:
-        """Check if tracking number matches ELTA format."""
-        tn = tracking_number.strip().upper()
-        for pattern in cls.PATTERNS:
-            if re.match(pattern, tn):
-                return True
-        return False
-    
+
     async def track(self, tracking_number: str) -> TrackingResult:
         """Track an ELTA shipment."""
         tracking_number = tracking_number.strip().upper()
@@ -61,7 +51,7 @@ class ELTACourier(BaseCourier):
         
         try:
             async with aiohttp.ClientSession() as session:
-                async with asyncio.timeout(30):
+                async with async_timeout.timeout(30):
                     async with session.post(
                         self.API_URL,
                         data=f"number={tracking_number}&s=0",
@@ -79,7 +69,14 @@ class ELTACourier(BaseCourier):
                                 error_message=f"HTTP error: {response.status}",
                             )
                         
-                        result = await response.json()
+                        # ELTA API returns JSON with wrong content-type (text/html)
+                        # Use text() then parse manually, handling potential UTF-8 BOM
+                        text = await response.text()
+                        # Remove UTF-8 BOM if present and parse JSON
+                        import json
+                        if text.startswith('\ufeff'):
+                            text = text[1:]  # Remove BOM
+                        result = json.loads(text)
                         return self._parse_response(tracking_number, result)
                         
         except aiohttp.ClientError as err:

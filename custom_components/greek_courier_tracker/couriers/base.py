@@ -43,28 +43,15 @@ class BaseCourier(ABC):
     @abstractmethod
     async def track(self, tracking_number: str) -> TrackingResult:
         """Track a shipment by tracking number.
-        
+
         Args:
             tracking_number: The tracking number to look up
-            
+
         Returns:
             TrackingResult with shipment status and events
         """
         pass
-    
-    @classmethod
-    @abstractmethod
-    def matches_tracking_number(cls, tracking_number: str) -> bool:
-        """Check if the tracking number matches this courier's format.
-        
-        Args:
-            tracking_number: The tracking number to check
-            
-        Returns:
-            True if the tracking number matches this courier's format
-        """
-        pass
-    
+
     def translate_status(self, status: str, translations: dict[str, str]) -> str:
         """Translate Greek status to English.
         

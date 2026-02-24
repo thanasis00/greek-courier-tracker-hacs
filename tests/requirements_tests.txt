@@ -1,0 +1,23 @@
+# Test dependencies for Greek Courier Tracker
+
+# Testing framework
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+pytest-homeassistant-custom-component>=0.13.0
+
+# HTTP client mocking
+aiohttp>=3.8.0
+async-timeout>=4.0.0
+
+# HTML parsing for web scraping couriers
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+
+# Type checking and linting
+mypy>=1.5.0
+ruff>=0.1.0
+black>=23.7.0
+
+# Home Assistant dependencies
+homeassistant>=2023.8.0

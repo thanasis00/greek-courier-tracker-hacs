@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 import aiohttp
-import asyncio
+import async_timeout
 
 from ..const import CourierType
 from .base import BaseCourier, TrackingEvent, TrackingResult
@@ -23,10 +23,9 @@ class BoxNowCourier(BaseCourier):
     
     # Tracking number patterns
     PATTERNS = [
-        r"^BN\d{8,10}$",   # BN prefix
-        r"^\d{10}$",       # 10 digits
+        r"^\d{10}$",       # 10 digits (Box Now format)
     ]
-    
+
     # Event type translations
     EVENT_TRANSLATIONS = {
         "new": "New Order",
@@ -36,18 +35,7 @@ class BoxNowCourier(BaseCourier):
         "expired": "Expired",
         "returned": "Returned",
     }
-    
-    @classmethod
-    def matches_tracking_number(cls, tracking_number: str) -> bool:
-        """Check if tracking number matches Box Now format."""
-        tn = tracking_number.strip().upper()
-        # Box Now uses 10 digits or BN prefix
-        if re.match(r"^BN\d{8,10}$", tn):
-            return True
-        # 10 digit numbers are ambiguous - could be ACS too
-        # We'll check for BN prefix as primary identifier
-        return False
-    
+
     async def track(self, tracking_number: str) -> TrackingResult:
         """Track a Box Now shipment."""
         tracking_number = tracking_number.strip()
@@ -62,7 +50,7 @@ class BoxNowCourier(BaseCourier):
         
         try:
             async with aiohttp.ClientSession() as session:
-                async with asyncio.timeout(30):
+                async with async_timeout.timeout(30):
                     async with session.post(
                         self.API_URL,
                         json={"parcelId": tracking_number},

@@ -255,8 +255,8 @@ print("\n1. TRACKING NUMBER DETECTION TESTS")
 print("-" * 40)
 
 tests = [
-    ("SE101046219GR", "elta"),
-    ("EL123456789GR", "elta"),
+    ("XX123456789GR", "elta"),
+    ("YY987654321GR", "elta"),
     ("BN12345678", "box_now"),
     ("CC12345678", "courier_center"),
     ("SP12345678", "speedex"),
@@ -301,9 +301,9 @@ print("-" * 40)
 
 async def test_live_apis():
     # Test ELTA with real tracking number
-    print("\n  Testing ELTA API with SE101046219GR...")
+    print("\n  Testing ELTA API with XX123456789GR...")
     elta = ELTATracker()
-    result = await elta.track("SE101046219GR")
+    result = await elta.track("XX123456789GR")
     
     if result.success:
         print(f"  ✓ ELTA API Response:")

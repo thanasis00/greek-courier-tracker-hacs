@@ -10,9 +10,12 @@ CONF_TRACKING_NUMBERS: Final = "tracking_numbers"
 CONF_SCAN_INTERVAL: Final = "scan_interval"
 CONF_NAME: Final = "name"
 CONF_COURIER: Final = "courier"
+CONF_TRACKING_NAME: Final = "tracking_name"  # Custom name for a tracking number
+CONF_AUTO_REMOVE_DELIVERED: Final = "auto_remove_delivered"  # Auto-remove delivered packages
+CONF_STOP_TRACKING_DELIVERED: Final = "stop_tracking_delivered"  # Stop tracking delivered packages
 
 # Default values
-DEFAULT_SCAN_INTERVAL: Final = 30  # minutes
+DEFAULT_SCAN_INTERVAL: Final = 1  # hours
 DEFAULT_NAME: Final = "Greek Courier Tracker"
 
 
@@ -35,16 +38,15 @@ COURIER_NAMES: Final[dict[str, str]] = {
     CourierType.SPEEDEX: "SpeedEx",
     CourierType.COURIER_CENTER: "Courier Center",
     CourierType.BOX_NOW: "Box Now",
+    CourierType.AUTO: "Auto-detect (try all)",
 }
 
 # Tracking number patterns for auto-detection
 TRACKING_PATTERNS: Final[dict[str, list[str]]] = {
-    # ELTA: SE/EL/GR followed by digits, ending with GR
+    # ELTA: Any 2 letters + 9 digits + GR (e.g., SE, EL, PW, etc.)
     CourierType.ELTA: [
-        r"^SE\d{9}GR$",      # SE101046219GR
-        r"^EL\d{9}GR$",      # EL...
-        r"^GR\d{9}[A-Z]{2}$",  # International
-        r"^[A-Z]{2}\d{9}GR$",  # Standard format
+        r"^[A-Z]{2}\d{9}GR$",      # XX123456789GR (SE, EL, PW, etc.)
+        r"^GR\d{9}[A-Z]{2}$",      # GR123456789XX (international)
     ],
     # ACS: 10 digits
     CourierType.ACS: [

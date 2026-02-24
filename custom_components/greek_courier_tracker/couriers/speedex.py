@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 import aiohttp
-import asyncio
+import async_timeout
 from bs4 import BeautifulSoup
 
 from ..const import CourierType
@@ -23,7 +23,6 @@ class SpeedExCourier(BaseCourier):
     
     # Tracking number patterns
     PATTERNS = [
-        r"^SP\d{8,10}$",     # SP + 8-10 digits
         r"^\d{12}$",         # 12 digits
         r"^\d{9}[A-Z]{2}$",  # 9 digits + 2 letters
     ]
@@ -35,16 +34,7 @@ class SpeedExCourier(BaseCourier):
         "ΠΑΡΑΛΑΒΗ": "Picked Up",
         "ΑΠΟΣΤΟΛΗ": "Shipped",
     }
-    
-    @classmethod
-    def matches_tracking_number(cls, tracking_number: str) -> bool:
-        """Check if tracking number matches SpeedEx format."""
-        tn = tracking_number.strip().upper()
-        for pattern in cls.PATTERNS:
-            if re.match(pattern, tn):
-                return True
-        return False
-    
+
     async def track(self, tracking_number: str) -> TrackingResult:
         """Track a SpeedEx shipment by scraping their website."""
         tracking_number = tracking_number.strip().upper()
@@ -57,7 +47,7 @@ class SpeedExCourier(BaseCourier):
         
         try:
             async with aiohttp.ClientSession() as session:
-                async with asyncio.timeout(30):
+                async with async_timeout.timeout(30):
                     async with session.get(
                         self.TRACKING_URL,
                         params=params,
@@ -74,8 +64,11 @@ class SpeedExCourier(BaseCourier):
                                 events=[],
                                 error_message=f"HTTP error: {response.status}",
                             )
-                        
+
                         html = await response.text()
+                        # Remove UTF-8 BOM if present
+                        if html.startswith('\ufeff'):
+                            html = html[1:]
                         return self._parse_html(tracking_number, html)
                         
         except aiohttp.ClientError as err:

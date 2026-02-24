@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 import aiohttp
-import asyncio
+import async_timeout
 from bs4 import BeautifulSoup
 
 from ..const import CourierType
@@ -23,8 +23,7 @@ class GenikiCourier(BaseCourier):
     
     # Tracking number patterns
     PATTERNS = [
-        r"^[A-Z]{2}\d{9,11}$",  # GT123456789
-        r"^\d{10,12}$",         # 10-12 digits
+        r"^\d{10,12}$",       # 10-12 digits (Geniki format)
     ]
     
     # Status translations
@@ -35,16 +34,7 @@ class GenikiCourier(BaseCourier):
         "ΚΡΑΤΗΣΗ": "Held",
         "ΕΠΙΣΤΡΟΦΗ": "Returned",
     }
-    
-    @classmethod
-    def matches_tracking_number(cls, tracking_number: str) -> bool:
-        """Check if tracking number matches Geniki format."""
-        tn = tracking_number.strip().upper()
-        for pattern in cls.PATTERNS:
-            if re.match(pattern, tn):
-                return True
-        return False
-    
+
     async def track(self, tracking_number: str) -> TrackingResult:
         """Track a Geniki Taxydromiki shipment."""
         tracking_number = tracking_number.strip().upper()
@@ -58,7 +48,7 @@ class GenikiCourier(BaseCourier):
         
         try:
             async with aiohttp.ClientSession() as session:
-                async with asyncio.timeout(30):
+                async with async_timeout.timeout(30):
                     async with session.get(url, headers=headers) as response:
                         if response.status != 200:
                             return TrackingResult(
@@ -71,8 +61,11 @@ class GenikiCourier(BaseCourier):
                                 events=[],
                                 error_message=f"HTTP error: {response.status}",
                             )
-                        
+
                         html = await response.text()
+                        # Remove UTF-8 BOM if present
+                        if html.startswith('\ufeff'):
+                            html = html[1:]
                         return self._parse_html(tracking_number, html)
                         
         except aiohttp.ClientError as err:

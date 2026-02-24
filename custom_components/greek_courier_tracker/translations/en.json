@@ -3,10 +3,12 @@
     "step": {
       "user": {
         "title": "Greek Courier Tracker",
-        "description": "Enter tracking numbers separated by commas or new lines.",
+        "description": "Add your first tracking number. You can add more later in the integration settings.",
         "data": {
-          "tracking_numbers": "Tracking numbers",
-          "scan_interval": "Scan interval (minutes)"
+          "tracking_numbers": "Tracking number",
+          "tracking_name": "Name (optional)",
+          "courier": "Courier provider",
+          "scan_interval": "Scan interval (hours)"
         }
       }
     },
@@ -21,7 +23,7 @@
         "description": "Update tracking numbers and scan interval.",
         "data": {
           "tracking_numbers": "Tracking numbers",
-          "scan_interval": "Scan interval (minutes)"
+          "scan_interval": "Scan interval (hours)"
         }
       }
     },

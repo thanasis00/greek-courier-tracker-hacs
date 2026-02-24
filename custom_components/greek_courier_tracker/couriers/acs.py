@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 import aiohttp
-import asyncio
+import async_timeout
 
 from ..const import CourierType
 from .base import BaseCourier, TrackingEvent, TrackingResult
@@ -31,12 +31,7 @@ class ACSCourier(BaseCourier):
         "Η αποστολή βρίσκεται σε διάκριση": "In Transit",
         "Η αποστολή δεν βρέθηκε": "Not Found",
     }
-    
-    @classmethod
-    def matches_tracking_number(cls, tracking_number: str) -> bool:
-        """Check if tracking number matches ACS format."""
-        return bool(re.match(r"^\d{10}$", tracking_number.strip()))
-    
+
     async def track(self, tracking_number: str) -> TrackingResult:
         """Track an ACS shipment.
         
@@ -58,7 +53,7 @@ class ACSCourier(BaseCourier):
         try:
             async with aiohttp.ClientSession() as session:
                 # Try the public API without token first
-                async with asyncio.timeout(30):
+                async with async_timeout.timeout(30):
                     url = self.API_URL.format(tracking_number=tracking_number)
                     async with session.get(url, headers=headers) as response:
                         if response.status == 200:
@@ -116,6 +111,9 @@ class ACSCourier(BaseCourier):
             ) as response:
                 if response.status == 200:
                     text = await response.text()
+                    # Remove UTF-8 BOM if present
+                    if text.startswith('\ufeff'):
+                        text = text[1:]
                     # Look for publicToken in the HTML
                     match = re.search(r'publicToken["\']?\s*[:=]\s*["\']([^"\']+)["\']', text)
                     if match:
