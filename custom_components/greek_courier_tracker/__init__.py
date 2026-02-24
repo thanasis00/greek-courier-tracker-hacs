@@ -219,18 +219,10 @@ class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Tracking
                 return result
             except Exception as err:
                 _LOGGER.error("Error tracking %s: %s", number, err, exc_info=True)
-                return TrackingResult(
-                    success=False,
-                    tracking_number=number,
-                    courier="unknown",
-                    courier_name="Unknown Courier",
-                    status="Error",
-                    status_category="error",
-                    events=[],
-                    error_message=str(err),
-                )
+                # Return None to indicate failure - we'll keep the old data
+                return None
 
-        results: list[TrackingResult | Exception]
+        results: list[TrackingResult | Exception | None]
         try:
             async with async_timeout.timeout(60):
                 results = await asyncio.gather(
@@ -239,40 +231,41 @@ class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Tracking
                 )
         except asyncio.TimeoutError:
             _LOGGER.error("Timeout while fetching tracking updates")
-            # Return error results for active numbers
-            return {
-                **(self.data or {}),
-                **{
-                    number: TrackingResult(
-                        success=False,
-                        tracking_number=number,
-                        courier="unknown",
-                        courier_name="Unknown Courier",
-                        status="Error",
-                        status_category="error",
-                        events=[],
-                        error_message="Timeout",
-                    )
-                    for number in active_numbers
-                }
-            }
+            # Keep existing data on timeout
+            return self.data or {}
 
         # Merge results with existing data (keep stopped tracking numbers)
         new_data = dict(self.data or {})
         for number, result in zip(active_numbers, results):
             if isinstance(result, Exception):
                 _LOGGER.error("Exception for %s: %s", number, result)
-                new_data[number] = TrackingResult(
-                    success=False,
-                    tracking_number=number,
-                    courier="unknown",
-                    courier_name="Unknown Courier",
-                    status="Error",
-                    status_category="error",
-                    events=[],
-                    error_message=str(result),
-                )
+                # Keep existing data for this tracking number
+                if number not in new_data:
+                    # Only create error result if we don't have any data yet
+                    new_data[number] = TrackingResult(
+                        success=False,
+                        tracking_number=number,
+                        courier="unknown",
+                        courier_name="Unknown Courier",
+                        status="No data available",
+                        status_category="unknown",
+                        events=[],
+                        error_message=str(result),
+                    )
+            elif result is None:
+                # API call failed - keep existing data
+                _LOGGER.warning("API call failed for %s, keeping previous data", number)
+            elif not result.success or result.status in ["Error", "Not Found"]:
+                # API returned error or not found - keep existing data if we have it
+                if number in new_data:
+                    _LOGGER.warning("API returned error for %s, keeping previous data", number)
+                else:
+                    # First time tracking, store the error result
+                    new_data[number] = result
             else:
+                # Success - update with new data and add timestamp
+                from datetime import datetime, timezone
+                result.last_updated = datetime.now(timezone.utc).isoformat()
                 new_data[number] = result
 
         _LOGGER.debug("Update complete: %d results", len(new_data))

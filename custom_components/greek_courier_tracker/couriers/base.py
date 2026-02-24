@@ -31,6 +31,7 @@ class TrackingResult:
     latest_event: TrackingEvent | None = None
     error_message: str | None = None
     raw_data: dict[str, Any] | None = None
+    last_updated: str | None = None  # ISO timestamp of last successful update
 
 
 class BaseCourier(ABC):

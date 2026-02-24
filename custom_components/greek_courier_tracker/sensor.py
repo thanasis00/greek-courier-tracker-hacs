@@ -134,6 +134,7 @@ class GreekCourierTrackingSensor(CoordinatorEntity, SensorEntity):
             "stop_tracking_delivered": self._stop_tracking_delivered,
             "tracking_stopped": self._stop_tracking_delivered and result.status_category == "delivered",
             "error_message": result.error_message,
+            "last_updated": result.last_updated,
         }
 
     @property

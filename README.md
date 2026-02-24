@@ -196,5 +196,6 @@ mode: single
 | `latest_place` | Location of latest event |
 | `events` | All tracking events |
 | `delivered` | True if package is delivered |
+| `last_updated` | ISO timestamp of last successful API update |
 
 MIT License
