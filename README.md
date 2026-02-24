@@ -46,7 +46,7 @@ Settings → Devices & Services → Greek Courier Tracker → ⚙️ Configure
 
 ## Lovelace Card
 
-Auto-discovery card (requires [auto-entities](https://github.com/thomasloven/hass-lovelace-auto-entities)):
+Auto-discovery card:
 
 ```yaml
 type: markdown
@@ -150,7 +150,7 @@ condition:
          and trigger.event.data.new_state.attributes.delivered == true
          and trigger.event.data.old_state.attributes.delivered == false }}
 action:
-  - service: notify.mobile_app_<your_device>
+  - service: notify.mobile_app_CHANGEME
     data:
       title: ✅ Package Delivered!
       message: >
@@ -174,7 +174,7 @@ condition:
          and trigger.event.data.new_state.attributes.status_category == 'in_transit'
          and trigger.event.data.old_state.attributes.status_category != 'in_transit' }}
 action:
-  - service: notify.mobile_app_<your_device>
+  - service: notify.mobile_app_CHANGEME
     data:
       title: 🚚 Package In Transit
       message: >
