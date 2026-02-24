@@ -101,21 +101,86 @@ content: >
 
 ## Automation Examples
 
-Delivery notification:
+### Get Notified on Every Status Change
+
+This automation notifies you whenever **any** tracked package changes status (moved to next step, delivered, in transit, etc.):
+
+**Automatic (works with all sensors)**
 
 ```yaml
-automation:
-  - alias: "Package Delivered"
-    trigger:
-      - platform: state
-        entity_id: sensor.greek_courier_tracker_1234567890
-        attribute: delivered
-        to: true
-    action:
-      - service: notify.mobile_app
-        data:
-          title: "Package Delivered!"
-          message: "Your shipment has been delivered!"
+alias: Tracking Status Changed
+description: Get notified on every package status change
+trigger:
+  - platform: event
+    event_type: state_changed
+condition:
+  - condition: template
+    value_template: >
+      {{ trigger.event.data.entity_id.startswith('sensor.greek_courier_tracker_') 
+         and trigger.event.data.old_state.state != trigger.event.data.new_state.state
+         and trigger.event.data.old_state.state not in ['unknown', 'unavailable']
+         and trigger.event.data.new_state.state not in ['unknown', 'unavailable'] }}
+action:
+  - service: notify.mobile_app_CHANGEME
+    data:
+      title: 📦 Package Update
+      message: >
+        {{ trigger.event.data.new_state.attributes.friendly_name }} changed from "{{ trigger.event.data.old_state.state }}" to "{{ trigger.event.data.new_state.state }}"
+        ({{ trigger.event.data.new_state.attributes.courier_name }})
+      data:
+        group: package-tracking
+mode: queued
+max: 10
+```
+
+### Optional: Specific Notifications
+
+#### Delivery Only
+
+```yaml
+alias: Package Delivered
+description: Notify when a package is delivered
+trigger:
+  - platform: event
+    event_type: state_changed
+condition:
+  - condition: template
+    value_template: >
+      {{ trigger.event.data.entity_id.startswith('sensor.greek_courier_tracker_')
+         and trigger.event.data.new_state.attributes.delivered == true
+         and trigger.event.data.old_state.attributes.delivered == false }}
+action:
+  - service: notify.mobile_app_<your_device>
+    data:
+      title: ✅ Package Delivered!
+      message: >
+        {{ trigger.event.data.new_state.attributes.friendly_name }} has been delivered!
+        Tracking: {{ trigger.event.data.new_state.attributes.tracking_number }}
+mode: single
+```
+
+#### In Transit Only
+
+```yaml
+alias: Package In Transit
+description: Notify when a package starts moving
+trigger:
+  - platform: event
+    event_type: state_changed
+condition:
+  - condition: template
+    value_template: >
+      {{ trigger.event.data.entity_id.startswith('sensor.greek_courier_tracker_')
+         and trigger.event.data.new_state.attributes.status_category == 'in_transit'
+         and trigger.event.data.old_state.attributes.status_category != 'in_transit' }}
+action:
+  - service: notify.mobile_app_<your_device>
+    data:
+      title: 🚚 Package In Transit
+      message: >
+        {{ trigger.event.data.new_state.attributes.friendly_name }} is now on its way!
+        Location: {{ trigger.event.data.new_state.attributes.latest_place }}
+mode: single
 ```
 
 ## Sensor Attributes
