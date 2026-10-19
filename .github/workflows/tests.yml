@@ -53,8 +53,6 @@ jobs:
 
       - name: Hassfest validation
         uses: home-assistant/actions/hassfest@master
-        with:
-          path: ./custom_components/greek_courier_tracker
 
   hacs-validate:
     runs-on: ubuntu-latest
@@ -65,7 +63,6 @@ jobs:
         uses: hacs/action@main
         with:
           category: integration
-          path: ./custom_components/greek_courier_tracker
 
   linting:
     runs-on: ubuntu-latest
