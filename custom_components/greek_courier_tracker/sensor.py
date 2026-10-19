@@ -14,6 +14,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, SIGNAL_TRACKING_ADDED, SIGNAL_TRACKING_CHANGED
 from .couriers.base import TrackingEvent, TrackingResult
+from .owners import owner_name
 from .tracking import get_tracking_data, sensor_unique_id, status_text
 from . import GreekCourierDataUpdateCoordinator
 
@@ -34,6 +35,7 @@ async def async_setup_entry(
                 tracking_number=item["tracking_number"],
                 tracking_name=item["name"],
                 stop_tracking_delivered=item["stop_tracking_delivered"],
+                owner=item.get("owner"),
             )
             for item in items
         ]
@@ -71,12 +73,14 @@ class GreekCourierTrackingSensor(CoordinatorEntity, SensorEntity):
         tracking_number: str,
         tracking_name: str,
         stop_tracking_delivered: bool = False,
+        owner: str | None = None,
     ) -> None:
         super().__init__(coordinator)
         self._entry = entry
         self._tracking_number = tracking_number
         self._tracking_name = tracking_name
         self._stop_tracking_delivered = stop_tracking_delivered
+        self._owner = owner
         self._attr_unique_id = sensor_unique_id(entry.entry_id, tracking_number)
         # Use the custom name as the entity name
         self._attr_name = tracking_name
@@ -97,13 +101,14 @@ class GreekCourierTrackingSensor(CoordinatorEntity, SensorEntity):
 
     @callback
     def _async_config_changed(self, configs: dict[str, dict[str, Any]]) -> None:
-        """Apply a new name or "stop when delivered" setting."""
+        """Apply a new name, owner or "stop when delivered" setting."""
         config = configs.get(self._tracking_number)
         if config is None:
             return
         self._tracking_name = config["name"]
         self._attr_name = config["name"]
         self._stop_tracking_delivered = config["stop_tracking_delivered"]
+        self._owner = config.get("owner")
         self.async_write_ha_state()
 
     @property
@@ -140,6 +145,8 @@ class GreekCourierTrackingSensor(CoordinatorEntity, SensorEntity):
         return {
             "tracking_number": result.tracking_number,
             "tracking_name": self._tracking_name,
+            "owner_user_id": self._owner,
+            "owner": owner_name(self.hass, self._owner) if self.hass else None,
             "courier": result.courier,
             "courier_name": result.courier_name,
             "status": result.status,

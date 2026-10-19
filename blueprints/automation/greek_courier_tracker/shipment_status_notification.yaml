@@ -1,17 +1,30 @@
 blueprint:
   name: Greek Courier Tracker - shipment updates
   description: >
-    Sends a notification to your phone when a tracked shipment changes status
+    Sends a notification to your phones when a tracked shipment changes status
     (in Greek or English, following your Home Assistant language).
+    Every shipment has an owner: the person who added it, or whoever you pick
+    in the card or in Configure. Turn on "Only their own shipments" so each
+    phone only gets the shipments of the person signed in to the Companion app
+    on it. Shared shipments, without an owner, go to every phone.
   domain: automation
   source_url: https://github.com/thanasis00/greek-courier-tracker-hacs/blob/main/blueprints/automation/greek_courier_tracker/shipment_status_notification.yaml
   input:
     notify_device:
-      name: Phone to notify
-      description: A device with the Home Assistant Companion app.
+      name: Phones to notify
+      description: Devices with the Home Assistant Companion app.
       selector:
         device:
           integration: mobile_app
+          multiple: true
+    only_own:
+      name: Only their own shipments
+      description: >
+        Each phone only gets the shipments owned by the person signed in to the
+        Companion app on it. Shared shipments still go to every phone.
+      default: false
+      selector:
+        boolean:
     only_delivered:
       name: Only when delivered
       description: Notify only when a shipment is delivered.
@@ -28,15 +41,26 @@ trigger:
 
 variables:
   only_delivered: !input only_delivered
+  only_own: !input only_own
+  phones: !input notify_device
+  # Automations made before several phones were allowed hold a single device
+  targets: >-
+    {%- set phones = [phones] if phones is string else phones -%}
+    {%- set owner_phones = trigger.event.data.get('owner_device_ids') -%}
+    {{ phones | select('in', owner_phones) | list if only_own and owner_phones is not none else phones }}
 
 condition:
   - condition: template
     value_template: "{{ not only_delivered or trigger.event.data.delivered }}"
 
 action:
-  - domain: mobile_app
-    type: notify
-    device_id: !input notify_device
-    title: "📦 {{ trigger.event.data.name }}"
-    message: >
-      {{ trigger.event.data.status }} ({{ trigger.event.data.courier_name }}{% if trigger.event.data.location %}, {{ trigger.event.data.location }}{% endif %})
+  - repeat:
+      for_each: "{{ targets }}"
+      sequence:
+        # The Companion app's notify action is named after the phone
+        - service: "notify.{{ ('mobile_app_' ~ device_attr(repeat.item, 'name')) | slugify }}"
+          continue_on_error: true
+          data:
+            title: "📦 {{ trigger.event.data.name }}"
+            message: >
+              {{ trigger.event.data.status }} ({{ trigger.event.data.courier_name }}{% if trigger.event.data.location %}, {{ trigger.event.data.location }}{% endif %})

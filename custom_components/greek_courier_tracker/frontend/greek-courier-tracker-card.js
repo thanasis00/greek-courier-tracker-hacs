@@ -38,6 +38,9 @@ const STRINGS = {
     tracking_number: "Tracking number",
     name: "Name (optional)",
     courier: "Courier",
+    owner: "Owner",
+    shared: "Shared",
+    change_owner: "Change owner",
     add: "Add",
     added: "Added. Looking it up with the couriers…",
     required: "Enter a tracking number",
@@ -59,6 +62,9 @@ const STRINGS = {
     tracking_number: "Αριθμός αποστολής",
     name: "Όνομα (προαιρετικό)",
     courier: "Εταιρεία",
+    owner: "Ιδιοκτήτης",
+    shared: "Κοινό",
+    change_owner: "Αλλαγή ιδιοκτήτη",
     add: "Προσθήκη",
     added: "Προστέθηκε. Αναζήτηση στις εταιρείες…",
     required: "Γράψε έναν αριθμό αποστολής",
@@ -86,6 +92,7 @@ const STYLES = `
   .title { display: flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 500; color: var(--primary-text-color); }
   .count { font-size: 13px; color: var(--secondary-text-color); }
   form { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1.5fr) minmax(0, 1.5fr) auto; gap: 8px; }
+  form.with-owner { grid-template-columns: minmax(0, 2fr) minmax(0, 1.5fr) minmax(0, 1.5fr) minmax(0, 1.2fr) auto; }
   input, select { font: inherit; font-size: 14px; color: var(--primary-text-color); background: var(--secondary-background-color, rgba(127, 127, 127, 0.08)); border: 1px solid var(--divider-color); border-radius: 8px; height: 40px; padding: 0 10px; min-width: 0; box-sizing: border-box; width: 100%; }
   input::placeholder { color: var(--secondary-text-color); }
   input:focus, select:focus { outline: none; border-color: var(--primary-color); }
@@ -117,6 +124,7 @@ const STYLES = `
   button.link { font: inherit; font-size: 13px; color: inherit; background: none; border: none; padding: 0; cursor: pointer; display: inline-flex; align-items: center; }
   button.link:hover { color: var(--primary-text-color); }
   button.remove.armed { color: var(--error-color); }
+  select.owner-edit { width: auto; height: 28px; font-size: 13px; padding: 0 6px; }
   .timeline { margin: 10px 0 0 6px; padding-left: 14px; border-left: 2px solid var(--divider-color); font-size: 13px; color: var(--primary-text-color); }
   .event { margin-bottom: 8px; }
   .event:last-child { margin-bottom: 0; }
@@ -124,7 +132,8 @@ const STYLES = `
   .empty { border-top: 1px solid var(--divider-color); padding: 14px 0 2px; font-size: 14px; color: var(--secondary-text-color); }
   @container (max-width: 520px) {
     form { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-    form input[name="tracking_number"], form button.add { grid-column: 1 / -1; }
+    form.with-owner { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    form input[name="tracking_number"], form select[name="owner"], form button.add { grid-column: 1 / -1; }
   }
 `;
 
@@ -168,6 +177,7 @@ class GreekCourierTrackerCard extends HTMLElement {
     this._expanded = new Set();
     this._pending = new Map();
     this._armedRemove = null;
+    this._editingOwner = null;
     this._signature = "";
     this._lastGood = new Map();
   }
@@ -209,6 +219,19 @@ class GreekCourierTrackerCard extends HTMLElement {
     return typeof label === "string" ? label : label[this._lang];
   }
 
+  /** People with a Home Assistant user: they can own shipments. */
+  _people() {
+    if (!this._hass) return [];
+    return Object.values(this._hass.states)
+      .filter((stateObj) => stateObj.entity_id.startsWith("person.") && stateObj.attributes.user_id)
+      .map((stateObj) => ({
+        entityId: stateObj.entity_id,
+        userId: stateObj.attributes.user_id,
+        name: stateObj.attributes.friendly_name || stateObj.entity_id,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
   /** Tracking sensors of this integration, as plain shipment objects. */
   _shipments() {
     if (!this._hass) return [];
@@ -242,6 +265,8 @@ class GreekCourierTrackerCard extends HTMLElement {
           entityId: stateObj.entity_id,
           name,
           trackingNumber: attrs.tracking_number || "",
+          ownerUserId: attrs.owner_user_id || "",
+          ownerName: attrs.owner || "",
           courierName: attrs.courier && attrs.courier !== "unknown" ? courierLabels[attrs.courier] || attrs.courier_name || "" : "",
           state: stateObj.state,
           statusEn: attrs.status || "",
@@ -311,6 +336,8 @@ class GreekCourierTrackerCard extends HTMLElement {
       [...this._pending.keys()],
       [...this._expanded],
       this._armedRemove,
+      this._editingOwner,
+      this._people().map((person) => [person.entityId, person.name]),
     ]);
     if (signature === this._signature) return;
     this._signature = signature;
@@ -323,6 +350,12 @@ class GreekCourierTrackerCard extends HTMLElement {
     const options = COURIERS.map(
       ([code, label]) => `<option value="${code}">${escapeHtml(this._courierLabel(label))}</option>`,
     ).join("");
+    // New shipments belong to whoever adds them unless they pick someone else;
+    // owners only matter when more than one person uses Home Assistant
+    const people = this._people();
+    const showOwners = people.length > 1;
+    const me = people.find((person) => person.userId === this._hass.user?.id);
+    const ownerOptions = this._ownerOptions(people, me ? me.entityId : "");
 
     if (!this.shadowRoot) this.attachShadow({ mode: "open" });
     this.shadowRoot.innerHTML = `
@@ -333,10 +366,11 @@ class GreekCourierTrackerCard extends HTMLElement {
           <span class="count"></span>
         </div>
         ${showForm ? `
-          <form autocomplete="off">
+          <form autocomplete="off"${showOwners ? ' class="with-owner"' : ""}>
             <input name="tracking_number" placeholder="${escapeHtml(t.tracking_number)}" aria-label="${escapeHtml(t.tracking_number)}" spellcheck="false" autocapitalize="characters">
             <input name="name" placeholder="${escapeHtml(t.name)}" aria-label="${escapeHtml(t.name)}">
             <select name="courier" aria-label="${escapeHtml(t.courier)}">${options}</select>
+            ${showOwners ? `<select name="owner" aria-label="${escapeHtml(t.owner)}" title="${escapeHtml(t.owner)}">${ownerOptions}</select>` : ""}
             <button class="add" type="submit"><ha-icon icon="mdi:plus"></ha-icon><span>${escapeHtml(t.add)}</span></button>
           </form>
           <div class="msg" role="status"></div>` : ""}
@@ -351,8 +385,30 @@ class GreekCourierTrackerCard extends HTMLElement {
       });
       form.tracking_number.addEventListener("input", () => this._message(""));
     }
-    this.shadowRoot.querySelector(".list").addEventListener("click", (event) => this._onListClick(event));
+    const list = this.shadowRoot.querySelector(".list");
+    list.addEventListener("click", (event) => this._onListClick(event));
+    list.addEventListener("change", (event) => this._onOwnerChange(event));
+    list.addEventListener("focusout", (event) => {
+      // Leaving the owner dropdown without picking closes it
+      if (!event.target.matches?.("select.owner-edit")) return;
+      setTimeout(() => {
+        if (this._editingOwner === event.target.dataset.id) {
+          this._editingOwner = null;
+          this._update();
+        }
+      }, 200);
+    });
     this._built = true;
+  }
+
+  /** <option>s with the people and "shared"; values are person entities ("" = shared). */
+  _ownerOptions(people, selected) {
+    const options = people.map(
+      (person) =>
+        `<option value="${escapeHtml(person.entityId)}"${person.entityId === selected ? " selected" : ""}>${escapeHtml(person.name)}</option>`,
+    );
+    options.push(`<option value=""${selected ? "" : " selected"}>${escapeHtml(this._t.shared)}</option>`);
+    return options.join("");
   }
 
   _message(text, isError = false) {
@@ -380,6 +436,7 @@ class GreekCourierTrackerCard extends HTMLElement {
 
     const data = { tracking_number: trackingNumber, courier };
     if (name) data.name = name;
+    if (form.owner) data.owner = form.owner.value;
     if (this._config.entry_id) data.config_entry_id = this._config.entry_id;
 
     const button = form.querySelector("button.add");
@@ -409,6 +466,16 @@ class GreekCourierTrackerCard extends HTMLElement {
       this.dispatchEvent(new CustomEvent("hass-more-info", {
         detail: { entityId: id }, bubbles: true, composed: true,
       }));
+    } else if (action === "owner") {
+      this._editingOwner = id;
+      this._update();
+      const select = this.shadowRoot.querySelector("select.owner-edit");
+      select?.focus();
+      try {
+        select?.showPicker?.();
+      } catch (err) {
+        // Not supported: the focused dropdown opens on the next click
+      }
     } else if (action === "remove") {
       // First click arms the button, second click removes
       if (this._armedRemove !== id) {
@@ -434,6 +501,35 @@ class GreekCourierTrackerCard extends HTMLElement {
     }
   }
 
+  async _onOwnerChange(event) {
+    const select = event.target.closest("select.owner-edit");
+    if (!select) return;
+    this._editingOwner = null;
+    try {
+      await this._hass.callService(DOMAIN, "set_owner", {
+        tracking_number: select.dataset.id,
+        owner: select.value,
+        ...(this._config.entry_id ? { config_entry_id: this._config.entry_id } : {}),
+      });
+    } catch (err) {
+      this._message(err?.message || String(err), true);
+    }
+    this._update();
+  }
+
+  /** Owner tag of a row; a dropdown while it is being changed. */
+  _ownerTag(shipment, people) {
+    const t = this._t;
+    if (people.length < 2 || !shipment.trackingNumber) return "";
+    const person = people.find((p) => p.userId === shipment.ownerUserId);
+    if (this._editingOwner === shipment.trackingNumber) {
+      return `<select class="owner-edit" data-id="${escapeHtml(shipment.trackingNumber)}" aria-label="${escapeHtml(t.owner)}">${this._ownerOptions(people, person ? person.entityId : "")}</select>`;
+    }
+    const label = shipment.ownerUserId ? person?.name || shipment.ownerName || shipment.ownerUserId : t.shared;
+    const icon = shipment.ownerUserId ? "mdi:account-outline" : "mdi:account-multiple-outline";
+    return `<button class="link" data-action="owner" data-id="${escapeHtml(shipment.trackingNumber)}" title="${escapeHtml(t.change_owner)}"><ha-icon icon="${icon}"></ha-icon>${escapeHtml(label)}</button>`;
+  }
+
   _bar(category, pending = false) {
     const steps = { created: 1, in_transit: 2, delivered: 3 }[category] || 0;
     const cls = category === "delivered" ? "done" : "on";
@@ -445,6 +541,7 @@ class GreekCourierTrackerCard extends HTMLElement {
   _renderList(shipments) {
     const t = this._t;
     const list = this.shadowRoot.querySelector(".list");
+    const people = this._people();
     const active = shipments.filter((s) => s.category !== "delivered").length + this._pending.size;
     this.shadowRoot.querySelector(".count").textContent = active ? t.active(active) : "";
 
@@ -471,6 +568,7 @@ class GreekCourierTrackerCard extends HTMLElement {
         s.place ? `<span><ha-icon icon="mdi:map-marker-outline"></ha-icon>${escapeHtml(s.place)}</span>` : "",
         s.when ? `<span><ha-icon icon="mdi:clock-outline"></ha-icon>${escapeHtml(s.when.label)}</span>` : "",
         !delivered && s.eta ? `<span><ha-icon icon="mdi:calendar-clock"></ha-icon>${escapeHtml(t.expected)} ${escapeHtml(s.eta.label)}</span>` : "",
+        this._ownerTag(s, people),
         s.trackingNumber ? `<span class="mono">${escapeHtml(s.trackingNumber)}</span>` : "",
       ].filter(Boolean).join("");
       const actions = [

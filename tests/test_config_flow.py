@@ -279,6 +279,9 @@ class TestCourierDropdown:
         mock_entry.data = {}
 
         flow = GreekCourierTrackerOptionsFlow(mock_entry)
+        # The form is shown again with the error and lists the users as owners
+        flow.hass = MagicMock()
+        flow.hass.auth.async_get_users = AsyncMock(return_value=[])
 
         # Try to add duplicate
         result = await flow.async_step_add_tracking(
@@ -310,6 +313,9 @@ class TestCourierDropdown:
         mock_entry.data = {}
 
         flow = GreekCourierTrackerOptionsFlow(mock_entry)
+        # The form is shown again with the error and lists the users as owners
+        flow.hass = MagicMock()
+        flow.hass.auth.async_get_users = AsyncMock(return_value=[])
 
         result = await flow.async_step_add_tracking(
             user_input={

@@ -104,8 +104,12 @@ class GreekCourierShipmentsTodo(CoordinatorEntity, TodoListEntity):
         if not tracking_number:
             raise ServiceValidationError("Enter a tracking number")
 
+        # The user who added the item owns the shipment
+        owner = self._context.user_id if self._context else None
         try:
-            tracking_data = add_tracking_item(get_tracking_data(self._entry), tracking_number, name=name)
+            tracking_data = add_tracking_item(
+                get_tracking_data(self._entry), tracking_number, name=name, owner=owner
+            )
         except TrackingNumberExistsError as err:
             raise ServiceValidationError(f"{tracking_number} is already tracked") from err
 

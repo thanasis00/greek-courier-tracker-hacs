@@ -86,6 +86,7 @@ def get_tracking_data(entry: ConfigEntry) -> list[dict[str, Any]]:
             "name": item.get("name") or item.get("tracking_number", ""),
             "stop_tracking_delivered": item.get("stop_tracking_delivered", False),
             "courier": item.get("courier") or CourierType.AUTO,
+            "owner": item.get("owner"),
         })
     return items
 
@@ -134,8 +135,9 @@ def add_tracking_item(
     name: str | None = None,
     courier: str = CourierType.AUTO,
     stop_tracking_delivered: bool = False,
+    owner: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Return a new list with the tracking number added."""
+    """Return a new list with the tracking number added (owner is a user ID)."""
     tracking_number = normalize_tracking_number(tracking_number)
     if not tracking_number:
         raise ValueError("Tracking number is required")
@@ -149,6 +151,7 @@ def add_tracking_item(
             "name": (name or "").strip() or tracking_number,
             "stop_tracking_delivered": stop_tracking_delivered,
             "courier": courier or CourierType.AUTO,
+            "owner": owner or None,
         },
     ]
 
@@ -175,6 +178,20 @@ def rename_tracking_item(
         {**item, "name": name.strip() or tracking_number}
         if item["tracking_number"] == tracking_number
         else item
+        for item in tracking_data
+    ]
+
+
+def set_tracking_owner(
+    tracking_data: list[dict[str, Any]], tracking_numbers: list[str], owner: str | None
+) -> list[dict[str, Any]]:
+    """Return a new list with the owner of the given tracking numbers changed."""
+    numbers = {normalize_tracking_number(number) for number in tracking_numbers}
+    missing = numbers - {item["tracking_number"] for item in tracking_data}
+    if missing:
+        raise TrackingNumberNotFoundError(", ".join(sorted(missing)))
+    return [
+        {**item, "owner": owner or None} if item["tracking_number"] in numbers else item
         for item in tracking_data
     ]
 

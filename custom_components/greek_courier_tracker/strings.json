@@ -39,7 +39,11 @@
           "tracking_number": "Tracking number",
           "name": "Name (optional)",
           "courier": "Courier",
+          "owner": "Owner",
           "stop_tracking_delivered": "Stop tracking when delivered"
+        },
+        "data_description": {
+          "owner": "Who the shipment belongs to (you, unless you pick someone else). With \"Only their own shipments\" in the notification blueprint, only the owner's phones are notified. Leave empty for a shared shipment."
         }
       },
       "edit_select": {
@@ -54,7 +58,11 @@
         "data": {
           "name": "Name",
           "courier": "Courier",
+          "owner": "Owner",
           "stop_tracking_delivered": "Stop tracking when delivered"
+        },
+        "data_description": {
+          "owner": "Who the shipment belongs to. With \"Only their own shipments\" in the notification blueprint, only the owner's phones are notified. Leave empty for a shared shipment."
         }
       },
       "delete_select": {
@@ -123,6 +131,10 @@
           "name": "Stop tracking when delivered",
           "description": "Stop checking the shipment after it's delivered."
         },
+        "owner": {
+          "name": "Owner",
+          "description": "Person the shipment belongs to. Defaults to the user who runs the action; empty text makes it a shared shipment."
+        },
         "config_entry_id": {
           "name": "Integration entry",
           "description": "Only needed if you have more than one Greek Courier Tracker entry."
@@ -136,6 +148,24 @@
         "tracking_number": {
           "name": "Tracking number",
           "description": "The tracking number to stop tracking."
+        },
+        "config_entry_id": {
+          "name": "Integration entry",
+          "description": "Only needed if you have more than one Greek Courier Tracker entry."
+        }
+      }
+    },
+    "set_owner": {
+      "name": "Set owner",
+      "description": "Changes who shipments belong to.",
+      "fields": {
+        "tracking_number": {
+          "name": "Tracking number",
+          "description": "The tracking numbers to change."
+        },
+        "owner": {
+          "name": "Owner",
+          "description": "Person the shipments belong to. Leave empty for shared shipments, which every phone gets."
         },
         "config_entry_id": {
           "name": "Integration entry",

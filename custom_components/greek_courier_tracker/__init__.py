@@ -31,6 +31,7 @@ from .const import (
 )
 from .couriers import _track_with_retry, get_courier, track_with_auto_detect
 from .couriers.base import TrackingResult
+from .owners import owner_device_ids, owner_name
 from .services import async_setup_services
 from .tracking import (
     get_auto_remove_days,
@@ -307,6 +308,7 @@ class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Tracking
                     entity_id = None
 
             config = self.tracking_configs.get(number, {})
+            owner = config.get("owner")
             latest = result.latest_event
             self.hass.bus.async_fire(EVENT_STATUS_CHANGED, {
                 "entity_id": entity_id,
@@ -321,6 +323,10 @@ class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Tracking
                 "delivered": result.status_category == "delivered",
                 "location": latest.location if latest else None,
                 "estimated_delivery": result.estimated_delivery,
+                # Shared shipments have no owner (and None instead of a phone list)
+                "owner_user_id": owner,
+                "owner": owner_name(self.hass, owner),
+                "owner_device_ids": owner_device_ids(self.hass, owner) if owner else None,
             })
 
     @staticmethod

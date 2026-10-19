@@ -28,6 +28,10 @@ add_tracking:
       default: false
       selector:
         boolean:
+    owner:
+      selector:
+        entity:
+          domain: person
     config_entry_id:
       selector:
         config_entry:
@@ -40,6 +44,22 @@ remove_tracking:
       example: "SE123456789GR"
       selector:
         text:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: greek_courier_tracker
+
+set_owner:
+  fields:
+    tracking_number:
+      required: true
+      example: "SE123456789GR"
+      selector:
+        text:
+    owner:
+      selector:
+        entity:
+          domain: person
     config_entry_id:
       selector:
         config_entry:

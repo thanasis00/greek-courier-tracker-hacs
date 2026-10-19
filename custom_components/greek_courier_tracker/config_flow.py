@@ -13,7 +13,7 @@ from homeassistant.helpers import config_validation as cv
 
 # Try to import selectors, fall back to dict representation for testing
 try:
-    from homeassistant.helpers.selectors import SelectSelector, SelectSelectorConfig, SelectSelectorMode
+    from homeassistant.helpers.selector import SelectSelector, SelectSelectorConfig, SelectSelectorMode
     HAS_SELECTORS = True
 except ImportError:
     HAS_SELECTORS = False
@@ -35,6 +35,7 @@ from .const import (
     CourierType,
     COURIER_NAMES,
 )
+from .owners import async_owner_options, owner_name, request_user_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -167,6 +168,7 @@ class GreekCourierTrackerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     "name": name if name else tracking_number,
                     "stop_tracking_delivered": False,
                     "courier": selected_courier,
+                    "owner": request_user_id(),
                 })
             _LOGGER.info("Parsed tracking data: %s", tracking_data)
 
@@ -373,12 +375,14 @@ class GreekCourierTrackerOptionsFlow(config_entries.OptionsFlow):
             stop_tracking = item.get("stop_tracking_delivered", False) if isinstance(item, dict) else False
             courier = item.get("courier", CourierType.AUTO) if isinstance(item, dict) else CourierType.AUTO
             courier_name = COURIER_NAMES.get(courier, courier)
+            owner = item.get("owner") if isinstance(item, dict) else None
 
             tracking_list.append({
                 "tracking_number": tracking_num,
                 "name": name,
                 "stop_tracking_delivered": stop_tracking,
                 "courier": courier_name,
+                "owner": owner_name(self.hass, owner) if owner else None,
             })
         return tracking_list
 
@@ -404,6 +408,16 @@ class GreekCourierTrackerOptionsFlow(config_entries.OptionsFlow):
         # Fallback for testing
         return cv.multi_select(options) if multiple else vol.In(list(options))
 
+    async def _owner_selector(self):
+        """Build a dropdown with the people who can own a shipment."""
+        options = await async_owner_options(self.hass)
+        if HAS_SELECTORS:
+            return SelectSelector(
+                SelectSelectorConfig(options=options, mode=SelectSelectorMode.DROPDOWN)
+            )
+        # Fallback for testing
+        return vol.In([option["value"] for option in options])
+
     async def async_step_add_tracking(self, user_input: dict[str, Any] | None = None):
         """Add a new tracking number."""
         errors: dict[str, str] = {}
@@ -413,6 +427,8 @@ class GreekCourierTrackerOptionsFlow(config_entries.OptionsFlow):
             name = user_input.get("name", "").strip()
             stop_tracking_delivered = user_input.get("stop_tracking_delivered", False)
             courier = user_input.get("courier", "auto")
+            # Left empty: a shared shipment
+            owner = user_input.get("owner") or None
 
             if not tracking_number:
                 errors["tracking_number"] = "tracking_number_required"
@@ -432,6 +448,7 @@ class GreekCourierTrackerOptionsFlow(config_entries.OptionsFlow):
                         "name": display_name,
                         "stop_tracking_delivered": stop_tracking_delivered,
                         "courier": courier,
+                        "owner": owner,
                     }
                     self.migrated_data.append(new_tracking)
 
@@ -453,10 +470,13 @@ class GreekCourierTrackerOptionsFlow(config_entries.OptionsFlow):
             # Fallback for testing: use simple vol.In with list of codes
             courier_selector = vol.In([code for code, _ in COURIER_LIST])
 
+        # The user filling in the form owns the shipment unless they pick someone else
+        suggested_owner = user_input.get("owner") if user_input is not None else request_user_id()
         schema = vol.Schema({
             vol.Required("tracking_number"): str,
             vol.Optional("name", default=""): str,
             vol.Optional("courier", default="auto"): courier_selector,
+            vol.Optional("owner", description={"suggested_value": suggested_owner}): await self._owner_selector(),
             vol.Optional("stop_tracking_delivered", default=False): bool,
         })
 
@@ -493,12 +513,14 @@ class GreekCourierTrackerOptionsFlow(config_entries.OptionsFlow):
             new_stop_tracking = user_input.get("stop_tracking_delivered", False)
             new_courier = user_input.get("courier", "auto")
 
-            # Update the tracking item
+            # Update the tracking item (an empty owner makes it shared)
             self.migrated_data[tracking_index] = {
+                **tracking_item,
                 "tracking_number": tracking_number,
                 "name": new_name if new_name else tracking_number,
                 "stop_tracking_delivered": new_stop_tracking,
                 "courier": new_courier,
+                "owner": user_input.get("owner") or None,
             }
 
             _LOGGER.info("Updated tracking: %s", self.migrated_data[tracking_index])
@@ -511,6 +533,7 @@ class GreekCourierTrackerOptionsFlow(config_entries.OptionsFlow):
         current_name = tracking_item.get("name", tracking_number) if isinstance(tracking_item, dict) else tracking_number
         current_stop_tracking = tracking_item.get("stop_tracking_delivered", False) if isinstance(tracking_item, dict) else False
         current_courier = tracking_item.get("courier", "auto") if isinstance(tracking_item, dict) else "auto"
+        current_owner = tracking_item.get("owner") if isinstance(tracking_item, dict) else None
 
         # Create courier selector
         if HAS_SELECTORS:
@@ -527,6 +550,7 @@ class GreekCourierTrackerOptionsFlow(config_entries.OptionsFlow):
         schema = vol.Schema({
             vol.Required("name", default=current_name): str,
             vol.Optional("courier", default=current_courier): courier_selector,
+            vol.Optional("owner", description={"suggested_value": current_owner}): await self._owner_selector(),
             vol.Optional("stop_tracking_delivered", default=current_stop_tracking): bool,
         })
 
@@ -551,6 +575,7 @@ class GreekCourierTrackerOptionsFlow(config_entries.OptionsFlow):
             courier = item.get("courier", "Auto")
 
             label = f"{name} ({tracking_num})" if name != tracking_num else tracking_num
-            lines.append(f"• {label} · {courier}")
+            owner = f" · {item['owner']}" if item.get("owner") else ""
+            lines.append(f"• {label} · {courier}{owner}")
 
         return "\n".join(lines)

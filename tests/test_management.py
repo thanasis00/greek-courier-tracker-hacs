@@ -3,10 +3,11 @@
 import re
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.components.todo import TodoItem, TodoItemStatus
+from homeassistant.core import Context, State
 from homeassistant.exceptions import ServiceValidationError
 
 from custom_components.greek_courier_tracker.couriers.base import TrackingResult
@@ -19,6 +20,7 @@ from custom_components.greek_courier_tracker.tracking import (
     parse_tracking_input,
     remove_tracking_items,
     rename_tracking_item,
+    set_tracking_owner,
 )
 
 COMPONENT_DIR = Path(__file__).parent.parent / "custom_components" / "greek_courier_tracker"
@@ -34,8 +36,39 @@ def _entry(tracking_numbers=None, scan_interval=2, entry_id="entry_1"):
     return entry
 
 
-def _item(number, name=None, courier="auto"):
-    return {"tracking_number": number, "name": name or number, "stop_tracking_delivered": False, "courier": courier}
+def _item(number, name=None, courier="auto", owner=None):
+    return {
+        "tracking_number": number, "name": name or number, "stop_tracking_delivered": False,
+        "courier": courier, "owner": owner,
+    }
+
+
+def _user(user_id, name, active=True, system=False):
+    return SimpleNamespace(id=user_id, name=name, is_active=active, system_generated=system)
+
+
+PEOPLE = [
+    State("person.athanasios", "home", {"user_id": "u1", "friendly_name": "Athanasios"}),
+    State("person.maria", "home", {"user_id": "u2", "friendly_name": "Maria"}),
+    State("person.guest", "home", {"friendly_name": "Guest"}),
+]
+
+
+def _people_hass():
+    """A hass mock with people and users."""
+    hass = MagicMock()
+    hass.states.async_all.side_effect = lambda domain=None: [
+        state for state in PEOPLE if domain is None or state.domain == domain
+    ]
+    hass.states.get.side_effect = lambda entity_id: next(
+        (state for state in PEOPLE if state.entity_id == entity_id), None
+    )
+    users = [_user("u1", "athanasios"), _user("u2", "maria"), _user("sys", "Supervisor", system=True)]
+    hass.auth.async_get_users = AsyncMock(return_value=users)
+    hass.auth.async_get_user = AsyncMock(
+        side_effect=lambda user_id: next((user for user in users if user.id == user_id), None)
+    )
+    return hass
 
 
 def _result(number, category="in_transit", status="In transit"):
@@ -72,6 +105,19 @@ class TestTrackingHelpers:
         result = add_tracking_item(result, "1234567", name="Shoes", courier="svuum")
         assert result[1] == _item("1234567", "Shoes", "svuum")
 
+    def test_add_tracking_item_owner(self):
+        """The owner is a user ID; an empty one means shared."""
+        assert add_tracking_item([], "A1", owner="u1")[0]["owner"] == "u1"
+        assert add_tracking_item([], "A1", owner="")[0]["owner"] is None
+
+    def test_set_tracking_owner(self):
+        """Changing the owner keeps everything else; unknown numbers fail."""
+        data = [_item("A1", "Shoes", owner="u1"), _item("B2")]
+        assert set_tracking_owner(data, ["a1"], "u2") == [_item("A1", "Shoes", owner="u2"), _item("B2")]
+        assert set_tracking_owner(data, ["A1"], None)[0] == _item("A1", "Shoes")
+        with pytest.raises(TrackingNumberNotFoundError):
+            set_tracking_owner(data, ["Z9"], "u1")
+
     def test_add_tracking_item_duplicate(self):
         """Adding an already tracked number fails."""
         with pytest.raises(TrackingNumberExistsError):
@@ -97,6 +143,10 @@ class TestTrackingHelpers:
         entry.data = {"tracking_numbers": ["A1", {"tracking_number": "B2", "name": "Box"}]}
         assert get_tracking_data(entry) == [_item("A1"), _item("B2", "Box")]
 
+    def test_get_tracking_data_keeps_owner(self):
+        """The owner survives reading the entry."""
+        assert get_tracking_data(_entry([_item("A1", owner="u1")]))[0]["owner"] == "u1"
+
     def test_build_options_keeps_scan_interval(self):
         """Saving a new list keeps the scan interval."""
         assert build_options(_entry(scan_interval=5), []) == {"tracking_numbers": [], "scan_interval": 5}
@@ -107,7 +157,7 @@ class TestActions:
 
     @staticmethod
     def _hass(entries):
-        hass = MagicMock()
+        hass = _people_hass()
         hass.config_entries.async_entries.return_value = entries
         hass.config_entries.async_get_entry.side_effect = lambda entry_id: next(
             (entry for entry in entries if entry.entry_id == entry_id), None
@@ -115,8 +165,8 @@ class TestActions:
         return hass
 
     @staticmethod
-    def _call(**data):
-        return SimpleNamespace(data=data)
+    def _call(user_id=None, **data):
+        return SimpleNamespace(data=data, context=Context(user_id=user_id))
 
     @pytest.mark.asyncio
     async def test_add_tracking(self):
@@ -131,6 +181,45 @@ class TestActions:
         options = hass.config_entries.async_update_entry.call_args.kwargs["options"]
         assert options["tracking_numbers"] == [_item("A1"), _item("1234567", "Shoes", "svuum")]
         assert options["scan_interval"] == 2
+
+    @pytest.mark.asyncio
+    async def test_add_tracking_owner(self):
+        """The caller owns the shipment unless an owner (or "" for shared) is given."""
+        from custom_components.greek_courier_tracker.services import async_add_tracking
+
+        hass = self._hass([_entry()])
+
+        async def owner_of(**data):
+            await async_add_tracking(hass, self._call(tracking_number="A1", **data))
+            return hass.config_entries.async_update_entry.call_args.kwargs["options"]["tracking_numbers"][0]["owner"]
+
+        assert await owner_of(user_id="u1") == "u1"
+        assert await owner_of() is None
+        assert await owner_of(user_id="u1", owner="person.maria") == "u2"
+        assert await owner_of(user_id="u1", owner="u2") == "u2"
+        assert await owner_of(user_id="u1", owner="") is None
+        with pytest.raises(ServiceValidationError):
+            await owner_of(owner="person.guest")
+        with pytest.raises(ServiceValidationError):
+            await owner_of(owner="nobody")
+
+    @pytest.mark.asyncio
+    async def test_set_owner(self):
+        """set_owner changes the owner; without one the shipment is shared."""
+        from custom_components.greek_courier_tracker.services import async_set_owner
+
+        hass = self._hass([_entry([_item("A1", owner="u1"), _item("B2")])])
+
+        await async_set_owner(hass, self._call(tracking_number=["A1", "B2"], owner="person.maria"))
+        options = hass.config_entries.async_update_entry.call_args.kwargs["options"]
+        assert [item["owner"] for item in options["tracking_numbers"]] == ["u2", "u2"]
+
+        await async_set_owner(hass, self._call(tracking_number=["A1"]))
+        options = hass.config_entries.async_update_entry.call_args.kwargs["options"]
+        assert options["tracking_numbers"][0]["owner"] is None
+
+        with pytest.raises(ServiceValidationError):
+            await async_set_owner(hass, self._call(tracking_number=["Z9"], owner="person.maria"))
 
     @pytest.mark.asyncio
     async def test_add_tracking_duplicate(self):
@@ -185,6 +274,7 @@ class TestActions:
         from custom_components.greek_courier_tracker.services import (
             ADD_TRACKING_SCHEMA,
             REMOVE_TRACKING_SCHEMA,
+            SET_OWNER_SCHEMA,
         )
 
         assert ADD_TRACKING_SCHEMA({"tracking_number": "A1"})["courier"] == "auto"
@@ -192,6 +282,9 @@ class TestActions:
         with pytest.raises(vol.Invalid):
             ADD_TRACKING_SCHEMA({"tracking_number": "A1", "courier": "dhl"})
         assert REMOVE_TRACKING_SCHEMA({"tracking_number": "A1"})["tracking_number"] == ["A1"]
+        assert "owner" not in ADD_TRACKING_SCHEMA({"tracking_number": "A1"})
+        assert ADD_TRACKING_SCHEMA({"tracking_number": "A1", "owner": None})["owner"] is None
+        assert SET_OWNER_SCHEMA({"tracking_number": "A1", "owner": "person.maria"})["tracking_number"] == ["A1"]
 
 
 class TestShipmentsTodo:
@@ -239,6 +332,17 @@ class TestShipmentsTodo:
             await todo.async_create_todo_item(TodoItem(summary="A1"))
 
     @pytest.mark.asyncio
+    async def test_create_item_owner(self):
+        """The user who adds the item owns the shipment."""
+        todo = self._todo(_entry())
+        todo.async_set_context(Context(user_id="u2"))
+
+        await todo.async_create_todo_item(TodoItem(summary="B2"))
+
+        options = todo.hass.config_entries.async_update_entry.call_args.kwargs["options"]
+        assert options["tracking_numbers"][-1] == _item("B2", owner="u2")
+
+    @pytest.mark.asyncio
     async def test_update_item_renames(self):
         """Renaming works, checking items off by hand is refused."""
         entry = _entry([_item("A1")])
@@ -274,7 +378,9 @@ class TestOptionsMenu:
     def _flow(tracking_numbers):
         from custom_components.greek_courier_tracker.config_flow import GreekCourierTrackerOptionsFlow
 
-        return GreekCourierTrackerOptionsFlow(_entry(tracking_numbers))
+        flow = GreekCourierTrackerOptionsFlow(_entry(tracking_numbers))
+        flow.hass = _people_hass()
+        return flow
 
     @pytest.mark.asyncio
     async def test_menu_options(self):
@@ -301,8 +407,61 @@ class TestOptionsMenu:
         )
         assert result["type"] == "create_entry"
         assert result["data"]["tracking_numbers"][1] == {
-            "tracking_number": "B2", "name": "Box", "stop_tracking_delivered": True, "courier": "acs",
+            "tracking_number": "B2", "name": "Box", "stop_tracking_delivered": True, "courier": "acs", "owner": None,
         }
+
+    @staticmethod
+    def _suggested(result, field):
+        key = next(key for key in result["data_schema"].schema if key == field)
+        return (key.description or {}).get("suggested_value")
+
+    @pytest.mark.asyncio
+    async def test_add_owner(self):
+        """The form suggests the signed-in user; the picked owner is saved."""
+        flow = self._flow([])
+
+        with patch("custom_components.greek_courier_tracker.config_flow.request_user_id", return_value="u1"):
+            result = await flow.async_step_add_tracking()
+        assert self._suggested(result, "owner") == "u1"
+        owner_selector = next(value for key, value in result["data_schema"].schema.items() if key == "owner")
+        assert [option["label"] for option in owner_selector.config["options"]] == ["Athanasios", "Maria"]
+
+        result = await flow.async_step_add_tracking(
+            {"tracking_number": "B2", "name": "", "courier": "auto", "owner": "u2", "stop_tracking_delivered": False}
+        )
+        assert result["data"]["tracking_numbers"][-1]["owner"] == "u2"
+
+    @pytest.mark.asyncio
+    async def test_add_without_owner_is_shared(self):
+        """Clearing the owner field makes a shared shipment."""
+        result = await self._flow([]).async_step_add_tracking(
+            {"tracking_number": "B2", "name": "", "courier": "auto", "stop_tracking_delivered": False}
+        )
+        assert result["data"]["tracking_numbers"][-1]["owner"] is None
+
+    @pytest.mark.asyncio
+    async def test_edit_owner(self):
+        """The edit form shows the owner, which can be changed or cleared."""
+        flow = self._flow([_item("A1", owner="u1")])
+
+        result = await flow.async_step_edit_select({"tracking_number": "A1"})
+        assert self._suggested(result, "owner") == "u1"
+
+        result = await flow.async_step_edit_tracking(
+            {"name": "A1", "courier": "auto", "owner": "u2", "stop_tracking_delivered": False}
+        )
+        assert result["data"]["tracking_numbers"][0]["owner"] == "u2"
+
+        flow = self._flow([_item("A1", owner="u1")])
+        await flow.async_step_edit_select({"tracking_number": "A1"})
+        result = await flow.async_step_edit_tracking({"name": "A1", "courier": "auto", "stop_tracking_delivered": False})
+        assert result["data"]["tracking_numbers"][0]["owner"] is None
+
+    @pytest.mark.asyncio
+    async def test_menu_shows_owner(self):
+        """The list of shipments names their owners."""
+        result = await self._flow([_item("A1", "Shoes", owner="u2"), _item("B2")]).async_step_init()
+        assert "• Shoes (A1) · Auto-detect (try all) · Maria" in result["description_placeholders"]["tracking_list"]
 
     @pytest.mark.asyncio
     async def test_delete_via_menu(self):
@@ -387,6 +546,22 @@ class TestFrontendCard:
         services = yaml.safe_load((COMPONENT_DIR / "services.yaml").read_text(encoding="utf-8"))
         options = services["add_tracking"]["fields"]["courier"]["selector"]["select"]["options"]
         assert options == [code.value for code, _ in COURIER_LIST]
+
+    def test_services_are_described(self):
+        """Every registered action is in services.yaml and the translations."""
+        import json
+
+        import yaml
+
+        from custom_components.greek_courier_tracker import services as module
+
+        registered = {module.SERVICE_ADD_TRACKING, module.SERVICE_REMOVE_TRACKING, module.SERVICE_SET_OWNER}
+        described = yaml.safe_load((COMPONENT_DIR / "services.yaml").read_text(encoding="utf-8"))
+        strings = json.loads((COMPONENT_DIR / "strings.json").read_text(encoding="utf-8"))["services"]
+        assert set(described) == registered
+        assert set(strings) == registered
+        for service, spec in described.items():
+            assert set(spec["fields"]) == set(strings[service]["fields"]), service
 
     def test_card_file_name_matches_const(self):
         """The registered card URL points to an existing file."""
@@ -555,6 +730,25 @@ class TestInPlaceUpdates:
         assert sensor.extra_state_attributes["stop_tracking_delivered"] is True
         sensor.async_write_ha_state.assert_called_once()
 
+    def test_sensor_owner(self):
+        """The sensor shows the owner and follows owner changes."""
+        from custom_components.greek_courier_tracker.sensor import GreekCourierTrackingSensor
+
+        coordinator = MagicMock()
+        coordinator.data = {"A1": _result("A1")}
+        sensor = GreekCourierTrackingSensor(coordinator, _entry(), "A1", "Shoes", owner="u1")
+        sensor.hass = _people_hass()
+        sensor.async_write_ha_state = MagicMock()
+        assert sensor.extra_state_attributes["owner_user_id"] == "u1"
+        assert sensor.extra_state_attributes["owner"] == "Athanasios"
+
+        sensor._async_config_changed({"A1": _item("A1", "Shoes", owner="u2")})
+        assert sensor.extra_state_attributes["owner"] == "Maria"
+
+        sensor._async_config_changed({"A1": _item("A1", "Shoes")})
+        assert sensor.extra_state_attributes["owner_user_id"] is None
+        assert sensor.extra_state_attributes["owner"] is None
+
 
 class TestOptionsFlowSavesChanges:
     """The options flow must not change the entry's options in place."""
@@ -567,7 +761,9 @@ class TestOptionsFlowSavesChanges:
 
         entry = _entry([_item("A1"), {"tracking_number": "B2", "name": "B2", "stop_tracking_delivered": False}])
         entry.options = MappingProxyType(dict(entry.options))
-        return GreekCourierTrackerOptionsFlow(entry), entry
+        flow = GreekCourierTrackerOptionsFlow(entry)
+        flow.hass = _people_hass()
+        return flow, entry
 
     @pytest.mark.asyncio
     async def test_add_does_not_mutate_entry(self):
@@ -744,6 +940,37 @@ class TestStatusEventsAndCleanup:
         assert data["delivered"] is True
         assert data["courier_name"] == "Skroutz Last Mile"
 
+    def test_event_owner(self):
+        """The event names the owner and their phones; shared shipments have none."""
+        from custom_components.greek_courier_tracker import GreekCourierDataUpdateCoordinator
+
+        hass = _people_hass()
+        hass.config.language = "en"
+        items = [_item("A1", "Shoes", owner="u2"), _item("B2")]
+        coordinator = GreekCourierDataUpdateCoordinator(
+            hass=hass,
+            tracking_numbers=["A1", "B2"],
+            tracking_configs={item["tracking_number"]: item for item in items},
+            scan_interval=1,
+        )
+
+        with patch(
+            "custom_components.greek_courier_tracker.owner_device_ids", return_value=["maria_phone"]
+        ) as devices:
+            coordinator._fire_status_events(
+                {"A1": _result("A1"), "B2": _result("B2")},
+                {"A1": _result("A1", "delivered", "Delivered"), "B2": _result("B2", "delivered", "Delivered")},
+            )
+
+        devices.assert_called_once_with(hass, "u2")
+        owned, shared = (call.args[1] for call in hass.bus.async_fire.call_args_list)
+        assert owned["owner_user_id"] == "u2"
+        assert owned["owner"] == "Maria"
+        assert owned["owner_device_ids"] == ["maria_phone"]
+        assert shared["owner_user_id"] is None
+        assert shared["owner"] is None
+        assert shared["owner_device_ids"] is None
+
     def test_no_event_without_change(self):
         """Unchanged, new and failed results don't fire events."""
         coordinator = self._coordinator()
@@ -805,16 +1032,73 @@ class TestStatusEventsAndCleanup:
         assert build_options(entry, [])["auto_remove_delivered"] == 5
 
 
+class TestOwners:
+    """Owners of shipments and their phones."""
+
+    def test_owner_name(self):
+        """The name comes from the person linked to the user."""
+        from custom_components.greek_courier_tracker.owners import owner_name
+
+        hass = _people_hass()
+        assert owner_name(hass, "u2") == "Maria"
+        assert owner_name(hass, "unknown") is None
+        assert owner_name(hass, None) is None
+
+    def test_owner_device_ids(self):
+        """A phone belongs to the user signed in to the Companion app on it."""
+        from custom_components.greek_courier_tracker.owners import owner_device_ids
+
+        hass = MagicMock()
+        hass.config_entries.async_entries.return_value = [
+            SimpleNamespace(entry_id="app1", data={"user_id": "u1"}),
+            SimpleNamespace(entry_id="app2", data={"user_id": "u2"}),
+            SimpleNamespace(entry_id="app3", data={"user_id": "u2"}),
+        ]
+        devices = {"app1": ["phone1"], "app2": ["phone2"], "app3": ["tablet2"]}
+
+        with patch("custom_components.greek_courier_tracker.owners.dr.async_get"), patch(
+            "custom_components.greek_courier_tracker.owners.dr.async_entries_for_config_entry",
+            side_effect=lambda registry, entry_id: [SimpleNamespace(id=device) for device in devices[entry_id]],
+        ):
+            assert owner_device_ids(hass, "u2") == ["phone2", "tablet2"]
+            assert owner_device_ids(hass, "u3") == []
+
+        hass.config_entries.async_entries.assert_called_with("mobile_app")
+
+    @pytest.mark.asyncio
+    async def test_owner_options(self):
+        """Active, non-system users can own shipments, sorted by name."""
+        from custom_components.greek_courier_tracker.owners import async_owner_options
+
+        assert await async_owner_options(_people_hass()) == [
+            {"value": "u1", "label": "Athanasios"},
+            {"value": "u2", "label": "Maria"},
+        ]
+
+    def test_request_user_id(self):
+        """Forms in Settings know who is filling them in."""
+        from custom_components.greek_courier_tracker.owners import current_request, request_user_id
+
+        assert request_user_id() is None
+        token = current_request.set({"hass_user": SimpleNamespace(id="u1")})
+        try:
+            assert request_user_id() == "u1"
+        finally:
+            current_request.reset(token)
+
+
 class TestBlueprint:
     """The notification blueprint is valid for Home Assistant."""
+
+    PATH = Path(__file__).parent.parent / "blueprints" / "automation" / "greek_courier_tracker" / (
+        "shipment_status_notification.yaml"
+    )
 
     def test_blueprint_is_valid(self):
         from homeassistant.components.blueprint.models import Blueprint
         from homeassistant.util.yaml.loader import load_yaml
 
-        path = Path(__file__).parent.parent / "blueprints" / "automation" / "greek_courier_tracker" / (
-            "shipment_status_notification.yaml"
-        )
+        path = self.PATH
         try:
             from homeassistant.components.blueprint.schemas import BLUEPRINT_SCHEMA
 
@@ -822,4 +1106,31 @@ class TestBlueprint:
         except (ImportError, TypeError):
             # Older Home Assistant validates without a schema argument
             blueprint = Blueprint(load_yaml(str(path)), expected_domain="automation")
-        assert set(blueprint.inputs) == {"notify_device", "only_delivered"}
+        assert set(blueprint.inputs) == {"notify_device", "only_own", "only_delivered"}
+        assert blueprint.inputs["notify_device"]["selector"]["device"]["multiple"] is True
+
+    @pytest.mark.parametrize("phones,only_own,data,expected", [
+        # Every phone, unless only their own shipments are wanted
+        (["a", "b"], False, {"owner_device_ids": ["a"]}, ["a", "b"]),
+        (["a", "b"], True, {"owner_device_ids": ["a"]}, ["a"]),
+        # Shared shipments go to every phone, as do events of older versions
+        (["a", "b"], True, {"owner_device_ids": None}, ["a", "b"]),
+        (["a", "b"], True, {}, ["a", "b"]),
+        # The owner has no phone among the selected ones
+        (["a", "b"], True, {"owner_device_ids": ["c"]}, []),
+        # Automations made when only one phone could be picked
+        ("a", False, {"owner_device_ids": None}, ["a"]),
+        ("a", True, {"owner_device_ids": ["b"]}, []),
+    ])
+    def test_targets(self, phones, only_own, data, expected):
+        """The phones that get a notification."""
+        import ast
+
+        import jinja2
+        from homeassistant.util.yaml.loader import load_yaml
+
+        template = load_yaml(str(self.PATH))["variables"]["targets"]
+        rendered = jinja2.Environment().from_string(template).render(
+            phones=phones, only_own=only_own, trigger={"event": {"data": data}}
+        )
+        assert ast.literal_eval(rendered.strip()) == expected

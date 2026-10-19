@@ -52,9 +52,27 @@ The courier is detected automatically unless you pick one: couriers whose number
     tracking_number: SE123456789GR
     name: New shoes          # optional
     courier: elta            # optional, default: auto
+    owner: person.maria      # optional, default: whoever runs the action
   ```
 
 - **Configure**: Settings → Devices & Services → Greek Courier Tracker → ⚙️ Configure, then add, edit or remove tracking numbers or change the scan interval.
+
+### Owners
+
+Every shipment belongs to the person who added it, so the [notification blueprint](#ready-made-blueprint) can notify only their phones. If you add a package for someone else, pick them as the owner:
+
+- **Dashboard card**: the owner dropdown next to Add (shown when more than one person uses Home Assistant). Click the owner of a shipment to change it later.
+- **Configure**: the Owner field when adding or editing a tracking number.
+- **Actions**: `owner` in `greek_courier_tracker.add_tracking`, or `greek_courier_tracker.set_owner` later:
+
+  ```yaml
+  action: greek_courier_tracker.set_owner
+  data:
+    tracking_number: SE123456789GR
+    owner: person.maria      # leave out for a shared shipment
+  ```
+
+Shipments without an owner are shared: every phone gets their notifications. Shipments added before owners existed, and those added by automations, are shared until you pick an owner.
 
 ## Dashboard Card
 
@@ -115,7 +133,9 @@ content: >
 
 [![Open your Home Assistant instance and show the blueprint import dialog with a specific blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fthanasis00%2Fgreek-courier-tracker-hacs%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fgreek_courier_tracker%2Fshipment_status_notification.yaml)
 
-Import the blueprint, pick your phone, and you get a notification whenever a shipment changes status (or only when it's delivered).
+Import the blueprint, pick your phones, and you get a notification whenever a shipment changes status (or only when it's delivered).
+
+Turn on **Only their own shipments** and each phone only gets the shipments of its owner, the person signed in to the Companion app on it (see [Owners](#owners)). Shared shipments still go to every phone. To mix both, for example only your own shipments on your phone but everything on another, create two automations from the blueprint.
 
 ### `greek_courier_tracker_status_changed` event
 
@@ -145,6 +165,8 @@ action:
 | `delivered` | True when delivered |
 | `location` | Location of the latest event |
 | `estimated_delivery` | Expected delivery, when the courier gives one |
+| `owner`, `owner_user_id` | Name and user ID of the owner (empty for shared shipments) |
+| `owner_device_ids` | Companion app devices of the owner (empty for shared shipments) |
 
 ## Sensor Attributes
 
@@ -152,6 +174,7 @@ action:
 |-----------|-------------|
 | `tracking_number` | The tracking number |
 | `tracking_name` | The name you gave the shipment |
+| `owner`, `owner_user_id` | Name and user ID of the owner (empty for shared shipments) |
 | `courier_name` | Full courier name |
 | `status` | Current status in English |
 | `status_el` | Current status in Greek |
