@@ -36,6 +36,7 @@ test: build
 	@echo "Running ALL tests in Docker..."
 	docker run --rm \
 		-v "$(PROJECT_ROOT)/custom_components:/app/custom_components:ro" \
+		-v "$(PROJECT_ROOT)/blueprints:/app/blueprints:ro" \
 		-v "$(TESTS_DIR):/app/tests:ro" \
 		-v "$(TESTS_DIR)/pytest.ini:/app/pytest.ini:ro" \
 		-e PYTHONPATH=/app \
@@ -49,6 +50,7 @@ test-unit: build
 	@echo "Running unit and integration tests (no live API)..."
 	docker run --rm \
 		-v "$(PROJECT_ROOT)/custom_components:/app/custom_components:ro" \
+		-v "$(PROJECT_ROOT)/blueprints:/app/blueprints:ro" \
 		-v "$(TESTS_DIR):/app/tests:ro" \
 		-v "$(TESTS_DIR)/pytest.ini:/app/pytest.ini:ro" \
 		-e PYTHONPATH=/app \
@@ -62,6 +64,7 @@ test-live: build
 	@echo "Running live API tests only..."
 	docker run --rm \
 		-v "$(PROJECT_ROOT)/custom_components:/app/custom_components:ro" \
+		-v "$(PROJECT_ROOT)/blueprints:/app/blueprints:ro" \
 		-v "$(TESTS_DIR):/app/tests:ro" \
 		-v "$(TESTS_DIR)/pytest.ini:/app/pytest.ini:ro" \
 		-e PYTHONPATH=/app \
@@ -77,6 +80,7 @@ test-all:
 	@echo "=== Python 3.12 (GHCR) ==="
 	docker run --rm \
 		-v "$(PROJECT_ROOT)/custom_components:/app/custom_components:ro" \
+		-v "$(PROJECT_ROOT)/blueprints:/app/blueprints:ro" \
 		-v "$(TESTS_DIR):/app/tests:ro" \
 		-v "$(TESTS_DIR)/pytest.ini:/app/pytest.ini:ro" \
 		ghcr.io/home-assistant/amd64-base-python:3.12-alpine3.19 \
@@ -90,6 +94,7 @@ test-cov: build
 	@mkdir -p $(TESTS_DIR)/htmlcov
 	docker run --rm \
 		-v "$(PROJECT_ROOT)/custom_components:/app/custom_components:ro" \
+		-v "$(PROJECT_ROOT)/blueprints:/app/blueprints:ro" \
 		-v "$(TESTS_DIR):/app/tests:ro" \
 		-v "$(TESTS_DIR)/pytest.ini:/app/pytest.ini:ro" \
 		-v "$(TESTS_DIR)/htmlcov:/app/htmlcov" \
@@ -105,6 +110,7 @@ test-shell: build
 	@echo "Opening interactive test shell..."
 	docker run --rm -it \
 		-v "$(PROJECT_ROOT)/custom_components:/app/custom_components:ro" \
+		-v "$(PROJECT_ROOT)/blueprints:/app/blueprints:ro" \
 		-v "$(TESTS_DIR):/app/tests:ro" \
 		-v "$(TESTS_DIR)/pytest.ini:/app/pytest.ini:ro" \
 		-e PYTHONPATH=/app \

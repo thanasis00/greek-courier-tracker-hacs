@@ -25,6 +25,7 @@ ENV PYTHONPATH=/app
 
 # Copy project files (build context is project root)
 COPY custom_components/ custom_components/
+COPY blueprints/ blueprints/
 COPY tests/ tests/
 COPY tests/pytest.ini /app/pytest.ini
 

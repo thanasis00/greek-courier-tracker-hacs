@@ -117,6 +117,7 @@ jobs:
         run: |
           docker run --rm \
             -v "$(pwd)/custom_components:/app/custom_components:ro" \
+            -v "$(pwd)/blueprints:/app/blueprints:ro" \
             -v "$(pwd)/tests:/app/tests:ro" \
             -v "$(pwd)/tests/pytest.ini:/app/pytest.ini:ro" \
             -e PYTHONPATH=/app \
