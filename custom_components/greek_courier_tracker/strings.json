@@ -67,7 +67,11 @@
       "settings": {
         "title": "Settings",
         "data": {
-          "scan_interval": "Scan interval (hours)"
+          "scan_interval": "Scan interval (hours)",
+          "auto_remove_delivered": "Remove delivered shipments after (days, 0 = never)"
+        },
+        "data_description": {
+          "auto_remove_delivered": "Delivered shipments are removed this many days after delivery. 0 keeps them."
         }
       }
     },

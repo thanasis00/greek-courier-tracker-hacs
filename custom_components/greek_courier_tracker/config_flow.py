@@ -22,11 +22,13 @@ except ImportError:
     SelectSelectorMode = None  # type: ignore
 
 from .const import (
+    CONF_AUTO_REMOVE_DELIVERED,
     CONF_SCAN_INTERVAL,
     CONF_TRACKING_NUMBERS,
     CONF_TRACKING_NAME,
     CONF_STOP_TRACKING_DELIVERED,
     CONF_COURIER,
+    DEFAULT_AUTO_REMOVE_DELIVERED,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_NAME,
     DOMAIN,
@@ -332,14 +334,18 @@ class GreekCourierTrackerOptionsFlow(config_entries.OptionsFlow):
         return self.async_show_form(step_id="delete_select", data_schema=schema)
 
     async def async_step_settings(self, user_input: dict[str, Any] | None = None):
-        """Change the scan interval."""
+        """Change the scan interval and the clean-up of delivered shipments."""
         if user_input is not None:
-            return self.async_create_entry(
-                title="", data=self._options_data(scan_interval=user_input[CONF_SCAN_INTERVAL])
-            )
+            data = self._options_data(scan_interval=user_input[CONF_SCAN_INTERVAL])
+            data[CONF_AUTO_REMOVE_DELIVERED] = user_input.get(CONF_AUTO_REMOVE_DELIVERED, 0)
+            return self.async_create_entry(title="", data=data)
 
+        auto_remove = self.config_entry.options.get(CONF_AUTO_REMOVE_DELIVERED, DEFAULT_AUTO_REMOVE_DELIVERED)
         schema = vol.Schema({
             vol.Required(CONF_SCAN_INTERVAL, default=self._scan_interval()): cv.positive_int,
+            vol.Required(CONF_AUTO_REMOVE_DELIVERED, default=auto_remove): vol.All(
+                vol.Coerce(int), vol.Range(min=0, max=365)
+            ),
         })
         return self.async_show_form(step_id="settings", data_schema=schema)
 
@@ -351,8 +357,9 @@ class GreekCourierTrackerOptionsFlow(config_entries.OptionsFlow):
         )
 
     def _options_data(self, scan_interval: int | None = None) -> dict[str, Any]:
-        """Build the options to save."""
+        """Build the options to save (other settings are kept)."""
         return {
+            **(self.config_entry.options or {}),
             CONF_TRACKING_NUMBERS: self.migrated_data,
             CONF_SCAN_INTERVAL: scan_interval if scan_interval is not None else self._scan_interval(),
         }
@@ -431,13 +438,7 @@ class GreekCourierTrackerOptionsFlow(config_entries.OptionsFlow):
                     _LOGGER.info("Added new tracking: %s", new_tracking)
 
                     # Save and go back to main menu
-                    data = {
-                        CONF_TRACKING_NUMBERS: self.migrated_data,
-                        CONF_SCAN_INTERVAL: self.config_entry.options.get(
-                            CONF_SCAN_INTERVAL,
-                            self.config_entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
-                        ),
-                    }
+                    data = self._options_data()
                     return self.async_create_entry(title="", data=data)
 
         # Create courier selector
@@ -503,13 +504,7 @@ class GreekCourierTrackerOptionsFlow(config_entries.OptionsFlow):
             _LOGGER.info("Updated tracking: %s", self.migrated_data[tracking_index])
 
             # Save and go back to main menu
-            data = {
-                CONF_TRACKING_NUMBERS: self.migrated_data,
-                CONF_SCAN_INTERVAL: self.config_entry.options.get(
-                    CONF_SCAN_INTERVAL,
-                    self.config_entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
-                ),
-            }
+            data = self._options_data()
             return self.async_create_entry(title="", data=data)
 
         # Show edit form with current values

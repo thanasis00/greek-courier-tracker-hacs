@@ -21,6 +21,13 @@ from custom_components.greek_courier_tracker.couriers import (
 )
 
 
+@pytest.fixture(autouse=True)
+def acs_token():
+    """ACS first reads a public token from its website; skip that in these tests."""
+    with patch.object(ACSCourier, "_get_token", AsyncMock(return_value="test-token")):
+        yield
+
+
 @pytest.mark.asyncio
 class TestELTAMockedAPI:
     """Mocked API tests for ELTA Courier."""
@@ -154,6 +161,42 @@ class TestACSMockedAPI:
             assert result.success is True
             assert result.status == "Not Found"
             assert len(result.events) == 0
+
+    async def test_acs_unknown_number(self):
+        """ACS answers unknown numbers with an item without history."""
+        courier = ACSCourier()
+
+        with patch("aiohttp.ClientSession.get") as mock_get:
+            mock_get.return_value.__aenter__.return_value.status = 200
+            mock_get.return_value.__aenter__.return_value.json = AsyncMock(return_value={
+                "count": 1,
+                "items": [{
+                    "trackingNumber": "1234567890",
+                    "notes": "Η αποστολή δεν βρέθηκε",
+                    "isDelivered": False,
+                    "statusHistory": [],
+                }],
+            })
+
+            result = await courier.track("1234567890")
+
+            assert result.success is True
+            assert result.status == "Not Found"
+
+    async def test_acs_sends_token_headers(self):
+        """The API needs the page token, the country and the site origin."""
+        courier = ACSCourier()
+
+        with patch("aiohttp.ClientSession.get") as mock_get:
+            mock_get.return_value.__aenter__.return_value.status = 200
+            mock_get.return_value.__aenter__.return_value.json = AsyncMock(return_value={"items": []})
+
+            await courier.track("1234567890")
+
+            headers = mock_get.call_args.kwargs["headers"]
+            assert headers["X-Encrypted-Key"] == "test-token"
+            assert headers["X-Country"] == "GR"
+            assert headers["Origin"] == "https://www.acscourier.net"
 
     async def test_acs_network_error(self):
         """Test ACS with network error."""
@@ -431,44 +474,121 @@ class TestGenikiMockedAPI:
             assert "HTTP error" in result.error_message
 
 
+COURIER_CENTER_WAYBILL_HTML = """
+<html><body>
+  <div class="info">
+    <div class="id"><strong>Αριθμός Φορτωτικής:</strong> <span>013700000001</span></div>
+    <div class="status"><strong>Κατάσταση:</strong> <span>(30) DeliveryCompleted</span></div>
+  </div>
+  <div class="track-table">
+    <div class="tr header"><div class="td date">Ημερομηνία</div><div class="td action">Ενέργεια</div></div>
+    <div class="tr">
+      <div class="td date">14/2/2026</div><div class="td date-skip skip"></div>
+      <div class="td time">10:15</div><div class="td action">Η αποστολή παρελήφθη</div>
+      <div class="td adapter"></div><div class="td area">ΑΘΗΝΑ</div>
+    </div>
+    <div class="tr">
+      <div class="td date">15/2/2026</div><div class="td date-skip skip"></div>
+      <div class="td time">14:30</div><div class="td action">Η αποστολή παραδόθηκε</div>
+      <div class="td adapter"></div><div class="td area">ΘΕΣΣΑΛΟΝΙΚΗ</div>
+    </div>
+  </div>
+</body></html>
+"""
+
+
+def _courier_center_list_html(*rows):
+    """A receipt number that matches several waybills."""
+    cells = "".join(
+        f'<div class="tr"><div class="td">REF</div><div class="td">{waybill}</div>'
+        f'<div class="td">(15) NewShipment</div><div class="td date">{sent}</div>'
+        f'<div class="td date">{sent}</div><div class="td"></div></div>'
+        for waybill, sent in rows
+    )
+    return (
+        '<div class="table"><div class="tr header"><div class="th">Αριθμός Αποδεικτικού</div>'
+        '<div class="th">Αριθμός Φορτωτικής</div><div class="th">Κατάσταση</div>'
+        f'<div class="th">Αποστολή</div><div class="th">Παράδοση</div></div>{cells}</div>'
+    )
+
+
 @pytest.mark.asyncio
 class TestCourierCenterMockedAPI:
     """Mocked API tests for Courier Center."""
 
     async def test_courier_center_successful_tracking(self):
-        """Test Courier Center with successful tracking response."""
+        """A waybill page with status and history."""
         courier = CourierCenterCourier()
-
-        mock_html = """
-        <html>
-            <body>
-                <div class="tr">
-                    <div id="date">15-02-2026</div>
-                    <div id="time">14:30</div>
-                    <div id="area">Athens</div>
-                    <div id="action">DeliveryCompleted</div>
-                </div>
-                <div class="tr">
-                    <div id="date">14-02-2026</div>
-                    <div id="time">10:15</div>
-                    <div id="area">Thessaloniki</div>
-                    <div id="action">InTransit</div>
-                </div>
-            </body>
-        </html>
-        """
 
         with patch("aiohttp.ClientSession.get") as mock_get:
             mock_get.return_value.__aenter__.return_value.status = 200
             mock_get.return_value.__aenter__.return_value.text = AsyncMock(
-                return_value=mock_html
+                return_value=COURIER_CENTER_WAYBILL_HTML
             )
 
-            result = await courier.track("CC12345678")
+            result = await courier.track("013700000001")
 
             assert result.success is True
             assert result.courier == "courier_center"
-            assert len(result.events) > 0
+            assert result.status == "Delivered"
+            assert result.status_category == "delivered"
+            assert len(result.events) == 2
+            # Newest first
+            assert result.latest_event.status == "Η αποστολή παραδόθηκε"
+            assert result.latest_event.location == "ΘΕΣΣΑΛΟΝΙΚΗ"
+            assert result.latest_event.time == "14:30"
+            assert result.status_el == "Η αποστολή παραδόθηκε"
+
+    async def test_courier_center_unknown_number(self):
+        """Unknown numbers show an error heading."""
+        courier = CourierCenterCourier()
+
+        with patch("aiohttp.ClientSession.get") as mock_get:
+            mock_get.return_value.__aenter__.return_value.status = 200
+            mock_get.return_value.__aenter__.return_value.text = AsyncMock(
+                return_value='<h4 class="error">Υπήρξε πρόβλημα με την αναζήτηση</h4>'
+            )
+
+            result = await courier.track("ZZ99999999")
+
+            assert result.success is True
+            assert result.status == "Not Found"
+
+    async def test_courier_center_receipt_number_follows_latest_waybill(self):
+        """A receipt number lists waybills; the newest one is tracked."""
+        from datetime import datetime, timedelta
+
+        courier = CourierCenterCourier()
+        recent = (datetime.now() - timedelta(days=2)).strftime("%d/%m/%Y")
+        older = (datetime.now() - timedelta(days=9)).strftime("%d/%m/%Y")
+
+        with patch("aiohttp.ClientSession.get") as mock_get:
+            mock_get.return_value.__aenter__.return_value.status = 200
+            mock_get.return_value.__aenter__.return_value.text = AsyncMock(side_effect=[
+                _courier_center_list_html(("013700000002", older), ("013700000001", recent)),
+                COURIER_CENTER_WAYBILL_HTML,
+            ])
+
+            result = await courier.track("1234567890")
+
+            assert mock_get.call_args.kwargs["params"] == {"tracknr": "013700000001"}
+            assert result.tracking_number == "1234567890"
+            assert result.status_category == "delivered"
+
+    async def test_courier_center_old_receipt_number_is_not_found(self):
+        """Old waybills of a receipt number belong to past orders."""
+        courier = CourierCenterCourier()
+
+        with patch("aiohttp.ClientSession.get") as mock_get:
+            mock_get.return_value.__aenter__.return_value.status = 200
+            mock_get.return_value.__aenter__.return_value.text = AsyncMock(
+                return_value=_courier_center_list_html(("013700000001", "28/4/2025"))
+            )
+
+            result = await courier.track("1234567890")
+
+            assert result.status == "Not Found"
+            assert mock_get.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -503,6 +623,8 @@ class TestSkroutzMockedAPI:
             ],
             "statusTextGr": "Η αποστολή βρίσκεται στο κέντρο διαλογής της Skroutz Last Mile",
             "statusTextEn": "The shipment is at the Skroutz Last Mile sorting centre",
+            "eta": {"startTime": "2026-02-16T10:00:00.000Z", "endTime": "2026-02-16T14:00:00.000Z"},
+            "deliveryPromiseTo": "2026-02-17",
         }
 
         with patch("aiohttp.ClientSession.get") as mock_get:
@@ -525,6 +647,9 @@ class TestSkroutzMockedAPI:
             assert result.latest_event.status_translated == "The shipment is at SLM HUB Αιγάλεω"
             assert result.latest_event.date == "2026-02-14"
             assert result.latest_event.time == "18:52"
+            assert result.status_el == "Η αποστολή βρίσκεται στο κέντρο διαλογής της Skroutz Last Mile"
+            # Delivery window start in Athens time
+            assert result.estimated_delivery == "2026-02-16T12:00+02:00"
 
     async def test_skroutz_delivered(self):
         """Test Skroutz Last Mile with a delivered shipment."""

@@ -11,12 +11,16 @@ CONF_SCAN_INTERVAL: Final = "scan_interval"
 CONF_NAME: Final = "name"
 CONF_COURIER: Final = "courier"
 CONF_TRACKING_NAME: Final = "tracking_name"  # Custom name for a tracking number
-CONF_AUTO_REMOVE_DELIVERED: Final = "auto_remove_delivered"  # Auto-remove delivered packages
+CONF_AUTO_REMOVE_DELIVERED: Final = "auto_remove_delivered"  # Days after delivery to remove a shipment
 CONF_STOP_TRACKING_DELIVERED: Final = "stop_tracking_delivered"  # Stop tracking delivered packages
 
 # Default values
 DEFAULT_SCAN_INTERVAL: Final = 1  # hours
 DEFAULT_NAME: Final = "Greek Courier Tracker"
+DEFAULT_AUTO_REMOVE_DELIVERED: Final = 0  # days after delivery, 0 = keep
+
+# Fired when the status of a tracked shipment changes
+EVENT_STATUS_CHANGED: Final = "greek_courier_tracker_status_changed"
 
 # Dispatcher signals for tracking numbers added/changed without a reload
 SIGNAL_TRACKING_ADDED: Final = "greek_courier_tracker_tracking_added_{entry_id}"

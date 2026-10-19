@@ -1,0 +1,42 @@
+blueprint:
+  name: Greek Courier Tracker - shipment updates
+  description: >
+    Sends a notification to your phone when a tracked shipment changes status
+    (in Greek or English, following your Home Assistant language).
+  domain: automation
+  source_url: https://github.com/thanasis00/greek-courier-tracker-hacs/blob/main/blueprints/automation/greek_courier_tracker/shipment_status_notification.yaml
+  input:
+    notify_device:
+      name: Phone to notify
+      description: A device with the Home Assistant Companion app.
+      selector:
+        device:
+          integration: mobile_app
+    only_delivered:
+      name: Only when delivered
+      description: Notify only when a shipment is delivered.
+      default: false
+      selector:
+        boolean:
+
+mode: queued
+max: 10
+
+trigger:
+  - platform: event
+    event_type: greek_courier_tracker_status_changed
+
+variables:
+  only_delivered: !input only_delivered
+
+condition:
+  - condition: template
+    value_template: "{{ not only_delivered or trigger.event.data.delivered }}"
+
+action:
+  - domain: mobile_app
+    type: notify
+    device_id: !input notify_device
+    title: "📦 {{ trigger.event.data.name }}"
+    message: >
+      {{ trigger.event.data.status }} ({{ trigger.event.data.courier_name }}{% if trigger.event.data.location %}, {{ trigger.event.data.location }}{% endif %})

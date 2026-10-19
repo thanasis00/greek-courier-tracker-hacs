@@ -36,9 +36,11 @@ Restart Home Assistant.
 3. Optionally enter your first tracking number (you can add more any time)
 4. Set the scan interval (default: 1 hour)
 
+Later, Configure → Settings lets you change the scan interval and remove delivered shipments automatically a number of days after delivery (off by default).
+
 ## Adding Tracking Numbers
 
-The courier is detected automatically unless you pick one. Use whichever is handiest:
+The courier is detected automatically unless you pick one: couriers whose number format matches are tried first, and once found, only that courier is asked on later updates. Use whichever is handiest:
 
 - **Dashboard card**: type the tracking number, an optional name and an optional courier, then press Add (see below).
 - **Shipments to-do list**: add an item such as `SE123456789GR New shoes` to the *Shipments* list (To-do lists in the sidebar, the mobile app or Assist). Delivered shipments are checked off automatically and deleting an item stops tracking it.
@@ -62,7 +64,7 @@ The integration ships its own card; there's nothing else to install. Edit a dash
 type: custom:greek-courier-tracker-card
 ```
 
-Each shipment shows its progress (created → in transit → delivered), latest location and time, and its full history on click. The card follows your Home Assistant language (Greek or English).
+Each shipment shows its progress (created → in transit → delivered), latest location and time, the expected delivery when the courier gives one (Skroutz Last Mile), and its full history on click. The card follows your Home Assistant language (Greek or English).
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -107,89 +109,42 @@ content: >
 
 </details>
 
-## Automation Examples
+## Notifications
 
-### Get Notified on Every Status Change
+### Ready-made blueprint
 
-This automation notifies you whenever **any** tracked package changes status (moved to next step, delivered, in transit, etc.):
+[![Open your Home Assistant instance and show the blueprint import dialog with a specific blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fthanasis00%2Fgreek-courier-tracker-hacs%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fgreek_courier_tracker%2Fshipment_status_notification.yaml)
 
-**Automatic (works with all sensors)**
+Import the blueprint, pick your phone, and you get a notification whenever a shipment changes status (or only when it's delivered).
+
+### `greek_courier_tracker_status_changed` event
+
+The integration fires this event whenever a tracked shipment changes status, so your own automations don't need templates:
 
 ```yaml
-alias: Tracking Status Changed
-description: Get notified on every package status change
+alias: Package delivered
 trigger:
   - platform: event
-    event_type: state_changed
-condition:
-  - condition: template
-    value_template: >
-      {{ trigger.event.data.entity_id.startswith('sensor.greek_courier_tracker_') 
-         and trigger.event.data.old_state.state != trigger.event.data.new_state.state
-         and trigger.event.data.old_state.state not in ['unknown', 'unavailable']
-         and trigger.event.data.new_state.state not in ['unknown', 'unavailable'] }}
+    event_type: greek_courier_tracker_status_changed
+    event_data:
+      delivered: true
 action:
   - service: notify.mobile_app_CHANGEME
     data:
-      title: 📦 Package Update
-      message: >
-        {{ trigger.event.data.new_state.attributes.friendly_name }} changed from "{{ trigger.event.data.old_state.state }}" to "{{ trigger.event.data.new_state.state }}"
-        ({{ trigger.event.data.new_state.attributes.courier_name }})
-      data:
-        group: package-tracking
-mode: queued
-max: 10
+      title: ✅ Package delivered
+      message: "{{ trigger.event.data.name }} ({{ trigger.event.data.courier_name }})"
 ```
 
-### Optional: Specific Notifications
-
-#### Delivery Only
-
-```yaml
-alias: Package Delivered
-description: Notify when a package is delivered
-trigger:
-  - platform: event
-    event_type: state_changed
-condition:
-  - condition: template
-    value_template: >
-      {{ trigger.event.data.entity_id.startswith('sensor.greek_courier_tracker_')
-         and trigger.event.data.new_state.attributes.delivered == true
-         and trigger.event.data.old_state.attributes.delivered == false }}
-action:
-  - service: notify.mobile_app_CHANGEME
-    data:
-      title: ✅ Package Delivered!
-      message: >
-        {{ trigger.event.data.new_state.attributes.friendly_name }} has been delivered!
-        Tracking: {{ trigger.event.data.new_state.attributes.tracking_number }}
-mode: single
-```
-
-#### In Transit Only
-
-```yaml
-alias: Package In Transit
-description: Notify when a package starts moving
-trigger:
-  - platform: event
-    event_type: state_changed
-condition:
-  - condition: template
-    value_template: >
-      {{ trigger.event.data.entity_id.startswith('sensor.greek_courier_tracker_')
-         and trigger.event.data.new_state.attributes.status_category == 'in_transit'
-         and trigger.event.data.old_state.attributes.status_category != 'in_transit' }}
-action:
-  - service: notify.mobile_app_CHANGEME
-    data:
-      title: 🚚 Package In Transit
-      message: >
-        {{ trigger.event.data.new_state.attributes.friendly_name }} is now on its way!
-        Location: {{ trigger.event.data.new_state.attributes.latest_place }}
-mode: single
-```
+| Event data | Description |
+|------------|-------------|
+| `name`, `tracking_number`, `entity_id` | Which shipment |
+| `courier`, `courier_name` | Courier code and name |
+| `status`, `old_status` | New and previous status, in your Home Assistant language |
+| `status_en` | New status in English |
+| `status_category` | delivered, in_transit, created, unknown |
+| `delivered` | True when delivered |
+| `location` | Location of the latest event |
+| `estimated_delivery` | Expected delivery, when the courier gives one |
 
 ## Sensor Attributes
 
@@ -198,13 +153,17 @@ mode: single
 | `tracking_number` | The tracking number |
 | `tracking_name` | The name you gave the shipment |
 | `courier_name` | Full courier name |
-| `status` | Current status (translated) |
+| `status` | Current status in English |
+| `status_el` | Current status in Greek |
 | `status_category` | delivered, in_transit, created, unknown |
+| `estimated_delivery` | Expected delivery, when the courier gives one |
 | `latest_date` | Date of latest event |
 | `latest_time` | Time of latest event |
 | `latest_place` | Location of latest event |
 | `events` | All tracking events |
 | `delivered` | True if package is delivered |
 | `last_updated` | ISO timestamp of last successful API update |
+
+The sensor state is the status in your Home Assistant language (Greek or English).
 
 MIT License

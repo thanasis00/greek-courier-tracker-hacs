@@ -55,7 +55,7 @@ class GenikiCourier(BaseCourier):
         tracking_number = tracking_number.strip().upper()
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._client_session() as session:
                 status, data = await self._fetch(session, tracking_number, "el")
                 if status != 200:
                     return TrackingResult(

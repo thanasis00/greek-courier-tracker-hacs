@@ -46,7 +46,7 @@ class SpeedExCourier(BaseCourier):
         }
         
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._client_session() as session:
                 async with async_timeout.timeout(30):
                     async with session.get(
                         self.TRACKING_URL,

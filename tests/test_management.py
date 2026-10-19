@@ -318,9 +318,22 @@ class TestOptionsMenu:
         """The scan interval is saved together with the numbers."""
         flow = self._flow([_item("A1")])
 
-        result = await flow.async_step_settings({"scan_interval": 6})
+        result = await flow.async_step_settings({"scan_interval": 6, "auto_remove_delivered": 14})
         assert result["type"] == "create_entry"
-        assert result["data"] == {"tracking_numbers": [_item("A1")], "scan_interval": 6}
+        assert result["data"] == {
+            "tracking_numbers": [_item("A1")], "scan_interval": 6, "auto_remove_delivered": 14,
+        }
+
+    @pytest.mark.asyncio
+    async def test_add_keeps_other_settings(self):
+        """Adding a number doesn't drop the clean-up setting."""
+        flow = self._flow([_item("A1")])
+        flow.config_entry.options = {**flow.config_entry.options, "auto_remove_delivered": 7}
+
+        result = await flow.async_step_add_tracking(
+            {"tracking_number": "B2", "name": "", "courier": "auto", "stop_tracking_delivered": False}
+        )
+        assert result["data"]["auto_remove_delivered"] == 7
 
 
 class TestConfigFlowUserStep:
@@ -584,3 +597,229 @@ class TestOptionsFlowSavesChanges:
 
         assert entry.options["tracking_numbers"][0]["courier"] == "auto"
         assert result["data"]["tracking_numbers"][0]["courier"] == "svuum"
+
+
+
+class TestEfficiency:
+    """Auto-detection tries likely couriers first and remembers what it found."""
+
+    @pytest.mark.parametrize("number,first", [
+        ("3416482", "svuum"),
+        ("E8GYRRONRYKL9", "skroutz"),
+        ("SE123456789GR", "elta"),
+        ("5194247074", "acs"),
+    ])
+    def test_couriers_by_likelihood(self, number, first):
+        """Couriers whose number format matches come first; all are still tried."""
+        from custom_components.greek_courier_tracker.couriers import COURIER_REGISTRY, couriers_by_likelihood
+
+        ordered = couriers_by_likelihood(number)
+        assert ordered[0].COURIER_CODE == first
+        assert set(ordered) == set(COURIER_REGISTRY.values())
+
+    @pytest.mark.asyncio
+    async def test_rate_limited_requests_are_not_retried(self):
+        """Retrying a 429 only makes the rate limiting worse."""
+        from unittest.mock import AsyncMock
+
+        from custom_components.greek_courier_tracker.couriers import SvuumCourier, _track_with_retry
+
+        courier = SvuumCourier()
+        courier.track = AsyncMock(return_value=TrackingResult(
+            success=False, tracking_number="1234567", courier="svuum", courier_name="Svuum",
+            status="Error", status_category="error", events=[], error_message="HTTP error: 429",
+        ))
+
+        result = await _track_with_retry(courier, "1234567")
+
+        assert courier.track.await_count == 1
+        assert result.error_message == "HTTP error: 429"
+
+    @pytest.mark.asyncio
+    async def test_coordinator_uses_detected_courier(self):
+        """An auto number that was found before only asks that courier."""
+        from unittest.mock import AsyncMock, patch
+
+        from custom_components.greek_courier_tracker import GreekCourierDataUpdateCoordinator
+
+        hass = MagicMock()
+        coordinator = GreekCourierDataUpdateCoordinator(
+            hass=hass, tracking_numbers=["A1"], tracking_configs={"A1": _item("A1")}, scan_interval=1,
+        )
+        previous = _result("A1")
+        fresh = _result("A1", status="Out for delivery")
+
+        with patch("custom_components.greek_courier_tracker.async_get_clientsession"), patch(
+            "custom_components.greek_courier_tracker._track_with_retry", AsyncMock(return_value=fresh)
+        ) as track, patch(
+            "custom_components.greek_courier_tracker.track_with_auto_detect", AsyncMock()
+        ) as auto_detect:
+            data = await coordinator._async_fetch(["A1"], {"A1": previous})
+
+        assert track.await_args.args[0].COURIER_CODE == "skroutz"
+        auto_detect.assert_not_awaited()
+        assert data["A1"].status == "Out for delivery"
+
+    @pytest.mark.asyncio
+    async def test_coordinator_detects_when_nothing_known(self):
+        """Without an earlier result all couriers are tried."""
+        from unittest.mock import AsyncMock, patch
+
+        from custom_components.greek_courier_tracker import GreekCourierDataUpdateCoordinator
+
+        coordinator = GreekCourierDataUpdateCoordinator(
+            hass=MagicMock(), tracking_numbers=["A1"], tracking_configs={"A1": _item("A1")}, scan_interval=1,
+        )
+
+        with patch("custom_components.greek_courier_tracker.async_get_clientsession"), patch(
+            "custom_components.greek_courier_tracker.track_with_auto_detect",
+            AsyncMock(return_value=_result("A1")),
+        ) as auto_detect:
+            await coordinator._async_fetch(["A1"], {})
+
+        auto_detect.assert_awaited_once()
+
+
+class TestStatusText:
+    """The sensor state follows the Home Assistant language."""
+
+    def test_english(self):
+        from custom_components.greek_courier_tracker.tracking import status_text
+
+        assert status_text(_result("A1", status="In Transit"), "en") == "In Transit"
+        assert status_text(_result("A1", "delivered", "Delivered"), "en", stopped=True) == "Delivered - Tracking Stopped"
+
+    def test_greek(self):
+        from custom_components.greek_courier_tracker.couriers.base import TrackingEvent
+        from custom_components.greek_courier_tracker.tracking import status_text
+
+        result = _result("A1", status="The shipment is at the hub")
+        assert status_text(result, "el") == "The shipment is at the hub"
+
+        result.latest_event = TrackingEvent(date="", time="", location="", status="Στο κέντρο διαλογής")
+        assert status_text(result, "el") == "Στο κέντρο διαλογής"
+
+        result.status_el = "Η αποστολή είναι στο κέντρο διαλογής"
+        assert status_text(result, "el") == "Η αποστολή είναι στο κέντρο διαλογής"
+
+        assert status_text(_result("A1", "unknown", "Not Found"), "el") == "Δεν βρέθηκε ακόμα"
+        assert status_text(_result("A1", status="In Transit"), "el-GR") == "Σε μεταφορά"
+        assert status_text(_result("A1", "delivered", "Delivered"), "el", stopped=True) == (
+            "Παραδόθηκε - Τέλος παρακολούθησης"
+        )
+
+
+class TestStatusEventsAndCleanup:
+    """Status change events and removal of old deliveries."""
+
+    @staticmethod
+    def _coordinator(entry=None):
+        from custom_components.greek_courier_tracker import GreekCourierDataUpdateCoordinator
+
+        hass = MagicMock()
+        hass.config.language = "en"
+        items = get_tracking_data(entry) if entry else [_item("A1", "Shoes")]
+        return GreekCourierDataUpdateCoordinator(
+            hass=hass,
+            tracking_numbers=[item["tracking_number"] for item in items],
+            tracking_configs={item["tracking_number"]: item for item in items},
+            scan_interval=1,
+            entry=entry,
+        )
+
+    def test_event_on_status_change(self):
+        """A changed status fires greek_courier_tracker_status_changed."""
+        coordinator = self._coordinator()
+
+        coordinator._fire_status_events(
+            {"A1": _result("A1")}, {"A1": _result("A1", "delivered", "Delivered")}
+        )
+
+        event_type, data = coordinator.hass.bus.async_fire.call_args.args
+        assert event_type == "greek_courier_tracker_status_changed"
+        assert data["tracking_number"] == "A1"
+        assert data["name"] == "Shoes"
+        assert data["old_status"] == "In transit"
+        assert data["status"] == "Delivered"
+        assert data["delivered"] is True
+        assert data["courier_name"] == "Skroutz Last Mile"
+
+    def test_no_event_without_change(self):
+        """Unchanged, new and failed results don't fire events."""
+        coordinator = self._coordinator()
+        failed = TrackingResult(
+            success=False, tracking_number="A1", courier="skroutz", courier_name="Skroutz Last Mile",
+            status="Error", status_category="error", events=[],
+        )
+
+        coordinator._fire_status_events({"A1": _result("A1")}, {"A1": _result("A1")})
+        coordinator._fire_status_events({}, {"A1": _result("A1")})
+        coordinator._fire_status_events({"A1": _result("A1")}, {"A1": failed})
+
+        coordinator.hass.bus.async_fire.assert_not_called()
+
+    def test_old_deliveries_are_removed(self):
+        """Shipments delivered longer ago than the setting are removed."""
+        from datetime import datetime, timedelta
+
+        from custom_components.greek_courier_tracker.couriers.base import TrackingEvent
+
+        entry = _entry([_item("A1"), _item("B2"), _item("C3")])
+        entry.options = {**entry.options, "auto_remove_delivered": 7}
+        coordinator = self._coordinator(entry)
+
+        def delivered(number, days_ago):
+            result = _result(number, "delivered", "Delivered")
+            day = (datetime.now() - timedelta(days=days_ago)).strftime("%Y-%m-%d")
+            result.latest_event = TrackingEvent(date=day, time="12:00", location="", status="Delivered")
+            return result
+
+        coordinator._remove_expired_deliveries(
+            {"A1": delivered("A1", 10), "B2": delivered("B2", 2), "C3": _result("C3")}
+        )
+
+        options = coordinator.hass.config_entries.async_update_entry.call_args.kwargs["options"]
+        assert [item["tracking_number"] for item in options["tracking_numbers"]] == ["B2", "C3"]
+        assert options["auto_remove_delivered"] == 7
+
+    def test_cleanup_off_by_default(self):
+        """Without the setting nothing is removed."""
+        from datetime import datetime, timedelta
+
+        from custom_components.greek_courier_tracker.couriers.base import TrackingEvent
+
+        coordinator = self._coordinator(_entry([_item("A1")]))
+        result = _result("A1", "delivered", "Delivered")
+        result.latest_event = TrackingEvent(
+            date=(datetime.now() - timedelta(days=100)).strftime("%Y-%m-%d"), time="", location="", status="",
+        )
+
+        coordinator._remove_expired_deliveries({"A1": result})
+
+        coordinator.hass.config_entries.async_update_entry.assert_not_called()
+
+    def test_build_options_keeps_settings(self):
+        """Saving a new list keeps every other option."""
+        entry = _entry([_item("A1")])
+        entry.options = {**entry.options, "auto_remove_delivered": 5}
+        assert build_options(entry, [])["auto_remove_delivered"] == 5
+
+
+class TestBlueprint:
+    """The notification blueprint is valid for Home Assistant."""
+
+    def test_blueprint_is_valid(self):
+        from homeassistant.components.blueprint.models import Blueprint
+        from homeassistant.util.yaml.loader import load_yaml
+
+        path = Path(__file__).parent.parent / "blueprints" / "automation" / "greek_courier_tracker" / (
+            "shipment_status_notification.yaml"
+        )
+        try:
+            from homeassistant.components.blueprint.schemas import BLUEPRINT_SCHEMA
+
+            blueprint = Blueprint(load_yaml(str(path)), expected_domain="automation", schema=BLUEPRINT_SCHEMA)
+        except (ImportError, TypeError):
+            # Older Home Assistant validates without a schema argument
+            blueprint = Blueprint(load_yaml(str(path)), expected_domain="automation")
+        assert set(blueprint.inputs) == {"notify_device", "only_delivered"}

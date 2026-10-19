@@ -30,6 +30,7 @@ from .tracking import (
     remove_tracking_items,
     rename_tracking_item,
     save_tracking_data,
+    status_text,
 )
 
 
@@ -83,7 +84,7 @@ class GreekCourierShipmentsTodo(CoordinatorEntity, TodoListEntity):
             details = [tracking_number]
             if result is not None:
                 details.append(result.courier_name)
-                details.append(result.status)
+                details.append(status_text(result, self.hass.config.language if self.hass else None))
             elif item["courier"] in COURIER_NAMES and item["courier"] != "auto":
                 details.append(COURIER_NAMES[item["courier"]])
 

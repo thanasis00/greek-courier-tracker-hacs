@@ -44,7 +44,7 @@ class SkroutzCourier(BaseCourier):
         }
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._client_session() as session:
                 async with async_timeout.timeout(30):
                     async with session.get(url, params=params, headers=headers) as response:
                         # Unknown tracking numbers return HTTP 400 "Package not found"
@@ -149,7 +149,23 @@ class SkroutzCourier(BaseCourier):
             events=events,
             latest_event=latest,
             raw_data=data,
+            estimated_delivery=self._estimated_delivery(data),
+            status_el=data.get("statusTextGr") or None,
         )
+
+    def _estimated_delivery(self, data: dict[str, Any]) -> str | None:
+        """Delivery window start, expected day or promised date (in that order)."""
+        eta = data.get("eta") or {}
+        if isinstance(eta, dict) and eta.get("startTime"):
+            try:
+                start = datetime.fromisoformat(str(eta["startTime"]).replace("Z", "+00:00"))
+                return start.astimezone(self.TIMEZONE).isoformat(timespec="minutes")
+            except ValueError:
+                pass
+        for key in ("expectedDayOfDelivery", "deliveryPromiseTo"):
+            if data.get(key):
+                return str(data[key])
+        return None
 
     def _get_category(self, data: dict[str, Any]) -> str:
         """Determine the status category from the shipment timestamps."""

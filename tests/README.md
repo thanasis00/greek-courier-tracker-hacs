@@ -51,7 +51,7 @@ cd tests
 
 ## Test Coverage
 
-✅ **137 tests** covering:
+✅ **158 tests** covering:
 - All 8 couriers (ELTA, ACS, SpeedEx, BoxNow, Geniki, CourierCenter, Skroutz Last Mile, Svuum)
 - Tracking number detection and validation
 - Status translation and categorization

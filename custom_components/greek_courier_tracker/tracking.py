@@ -9,11 +9,36 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import (
+    CONF_AUTO_REMOVE_DELIVERED,
     CONF_SCAN_INTERVAL,
     CONF_TRACKING_NUMBERS,
+    DEFAULT_AUTO_REMOVE_DELIVERED,
     DEFAULT_SCAN_INTERVAL,
     CourierType,
 )
+from .couriers.base import TrackingResult
+
+GREEK = re.compile(r"[\u0370-\u03FF\u1F00-\u1FFF]")
+
+# Greek for the English statuses the couriers report themselves
+STATUS_TEXT_EL = {
+    "Not Found": "Δεν βρέθηκε ακόμα",
+    "Error": "Σφάλμα",
+    "Unknown": "Άγνωστη κατάσταση",
+    "Delivered": "Παραδόθηκε",
+    "Delivered - Tracking Stopped": "Παραδόθηκε - Τέλος παρακολούθησης",
+    "In Transit": "Σε μεταφορά",
+    "Picked Up": "Παραλήφθηκε",
+    "Shipment Created": "Δημιουργήθηκε",
+    "New Order": "Νέα παραγγελία",
+    "In Depot": "Στην αποθήκη",
+    "At Destination Locker": "Στο locker προορισμού",
+    "Expired": "Έληξε",
+    "Returned": "Επιστράφηκε",
+    "New Shipment": "Νέα αποστολή",
+    "Out for Delivery": "Προς παράδοση",
+    "Returning to Sender": "Επιστρέφει στον αποστολέα",
+}
 
 
 class TrackingNumberExistsError(ValueError):
@@ -65,6 +90,28 @@ def get_tracking_data(entry: ConfigEntry) -> list[dict[str, Any]]:
     return items
 
 
+def get_auto_remove_days(entry: ConfigEntry) -> int:
+    """Days after delivery when a shipment is removed (0 keeps it)."""
+    return int((entry.options or {}).get(CONF_AUTO_REMOVE_DELIVERED, DEFAULT_AUTO_REMOVE_DELIVERED))
+
+
+def status_text(result: TrackingResult, language: str | None, stopped: bool = False) -> str:
+    """Return the status in Greek for a Greek Home Assistant, else in English."""
+    english = "Delivered - Tracking Stopped" if stopped else result.status
+    if not (language if isinstance(language, str) else "").lower().startswith("el"):
+        return english
+    if stopped:
+        return STATUS_TEXT_EL[english]
+    if english in ("Not Found", "Error"):
+        return STATUS_TEXT_EL[english]
+    if result.status_el:
+        return result.status_el
+    latest = result.latest_event
+    if latest and GREEK.search(latest.status or ""):
+        return latest.status
+    return STATUS_TEXT_EL.get(english, english)
+
+
 def get_scan_interval(entry: ConfigEntry) -> int:
     """Return the scan interval of an entry (options first, then data)."""
     if entry.options and CONF_SCAN_INTERVAL in entry.options:
@@ -73,8 +120,9 @@ def get_scan_interval(entry: ConfigEntry) -> int:
 
 
 def build_options(entry: ConfigEntry, tracking_data: list[dict[str, Any]]) -> dict[str, Any]:
-    """Build the entry options for a new list of tracking items."""
+    """Build the entry options for a new list of tracking items (other settings are kept)."""
     return {
+        **(entry.options or {}),
         CONF_TRACKING_NUMBERS: tracking_data,
         CONF_SCAN_INTERVAL: get_scan_interval(entry),
     }

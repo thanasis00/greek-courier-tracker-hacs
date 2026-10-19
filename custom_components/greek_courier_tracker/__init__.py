@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +15,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.const import Platform
@@ -24,13 +25,22 @@ from .const import (
     CARD_FILENAME,
     CARD_URL_BASE,
     DOMAIN,
+    EVENT_STATUS_CHANGED,
     SIGNAL_TRACKING_ADDED,
     SIGNAL_TRACKING_CHANGED,
 )
-from .couriers import track_with_auto_detect
+from .couriers import _track_with_retry, get_courier, track_with_auto_detect
 from .couriers.base import TrackingResult
 from .services import async_setup_services
-from .tracking import get_scan_interval, get_tracking_data, sensor_unique_id
+from .tracking import (
+    get_auto_remove_days,
+    get_scan_interval,
+    get_tracking_data,
+    remove_tracking_items,
+    save_tracking_data,
+    sensor_unique_id,
+    status_text,
+)
 
 PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.TODO]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -100,6 +110,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             tracking_numbers=tracking_numbers,
             tracking_configs=tracking_configs,
             scan_interval=scan_interval,
+            entry=entry,
         )
 
         # Initial refresh to validate configuration
@@ -181,6 +192,7 @@ class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Tracking
         tracking_numbers: list[str],
         tracking_configs: dict[str, dict],
         scan_interval: int,
+        entry: ConfigEntry | None = None,
     ) -> None:
         super().__init__(
             hass,
@@ -191,8 +203,20 @@ class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Tracking
         self.tracking_numbers = tracking_numbers
         self.tracking_configs = tracking_configs
         self.scan_interval = scan_interval
+        self.entry = entry
         self._apply_lock = asyncio.Lock()
+        self._delivered_since: dict[str, datetime] = {}
         _LOGGER.debug("Coordinator initialized with %d tracking numbers", len(tracking_numbers))
+
+    @staticmethod
+    def _detected_courier(number: str, data: dict[str, TrackingResult]) -> str | None:
+        """Return the courier that last tracked this number successfully."""
+        result = data.get(number)
+        if result is None or not result.success or result.status in ["Not Found", "Error"]:
+            return None
+        if result.courier in (None, "", "unknown"):
+            return None
+        return str(getattr(result.courier, "value", result.courier))
 
     def _current_data(self) -> dict[str, TrackingResult]:
         """Return the data of the numbers that are still tracked."""
@@ -246,8 +270,95 @@ class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Tracking
                     data[number] = fetched[number]
 
             # Notifies the entities and restarts the refresh timer (new interval)
+            old_data = self.data or {}
             self.async_set_updated_data(data)
+            self._after_update(old_data, data)
             return changes
+
+    def _after_update(
+        self, old_data: dict[str, TrackingResult], new_data: dict[str, TrackingResult]
+    ) -> None:
+        """Announce status changes and clean up old deliveries."""
+        self._fire_status_events(old_data, new_data)
+        self._remove_expired_deliveries(new_data)
+
+    @staticmethod
+    def _status_key(result: TrackingResult) -> tuple:
+        latest = result.latest_event
+        return (result.status, result.status_category, latest.status if latest else None)
+
+    def _fire_status_events(
+        self, old_data: dict[str, TrackingResult], new_data: dict[str, TrackingResult]
+    ) -> None:
+        """Fire greek_courier_tracker_status_changed for every shipment that moved."""
+        language = getattr(self.hass.config, "language", None)
+        for number, result in new_data.items():
+            old = old_data.get(number)
+            if old is None or not result.success or self._status_key(old) == self._status_key(result):
+                continue
+
+            entity_id = None
+            if self.entry is not None:
+                try:
+                    entity_id = er.async_get(self.hass).async_get_entity_id(
+                        "sensor", DOMAIN, sensor_unique_id(self.entry.entry_id, number)
+                    )
+                except Exception:  # registry not available (tests)
+                    entity_id = None
+
+            config = self.tracking_configs.get(number, {})
+            latest = result.latest_event
+            self.hass.bus.async_fire(EVENT_STATUS_CHANGED, {
+                "entity_id": entity_id,
+                "tracking_number": number,
+                "name": config.get("name", number),
+                "courier": str(getattr(result.courier, "value", result.courier)),
+                "courier_name": result.courier_name,
+                "old_status": status_text(old, language),
+                "status": status_text(result, language),
+                "status_en": result.status,
+                "status_category": result.status_category,
+                "delivered": result.status_category == "delivered",
+                "location": latest.location if latest else None,
+                "estimated_delivery": result.estimated_delivery,
+            })
+
+    @staticmethod
+    def _delivery_date(result: TrackingResult) -> datetime | None:
+        """Date of the delivery event, if it can be read."""
+        latest = result.latest_event
+        if latest is None:
+            return None
+        for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y"):
+            try:
+                return datetime.strptime(latest.date, fmt)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    def _remove_expired_deliveries(self, data: dict[str, TrackingResult]) -> None:
+        """Stop tracking shipments delivered more than the configured days ago."""
+        if self.entry is None:
+            return
+        days = get_auto_remove_days(self.entry)
+        if days <= 0:
+            return
+
+        now = datetime.now()
+        expired = []
+        for number, result in data.items():
+            if result.status_category != "delivered":
+                self._delivered_since.pop(number, None)
+                continue
+            since = self._delivered_since.setdefault(number, self._delivery_date(result) or now)
+            if number in self.tracking_configs and now - since >= timedelta(days=days):
+                expired.append(number)
+
+        if expired:
+            _LOGGER.info("Removing shipments delivered more than %d days ago: %s", days, expired)
+            save_tracking_data(
+                self.hass, self.entry, remove_tracking_items(get_tracking_data(self.entry), expired)
+            )
 
     async def _async_update_data(self) -> dict[str, TrackingResult]:
         """Fetch latest data for all tracking numbers."""
@@ -278,13 +389,17 @@ class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Tracking
             _LOGGER.debug("No active tracking numbers to update")
             return self._current_data()
 
-        return await self._async_fetch(active_numbers, self._current_data())
+        new_data = await self._async_fetch(active_numbers, self._current_data())
+        self._after_update(self.data or {}, new_data)
+        return new_data
 
     async def _async_fetch(
         self, numbers: list[str], base_data: dict[str, TrackingResult]
     ) -> dict[str, TrackingResult]:
         """Track the given numbers and merge the results into base_data."""
         active_numbers = numbers
+
+        session = async_get_clientsession(self.hass)
 
         async def _track_one(number: str) -> TrackingResult:
             _LOGGER.debug("Tracking: %s", number)
@@ -295,17 +410,26 @@ class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Tracking
 
                 if selected_courier and selected_courier != "auto":
                     # Use the selected courier
-                    from .couriers import get_courier, _track_with_retry
-                    courier = get_courier(selected_courier)
+                    courier = get_courier(selected_courier, session)
                     if courier:
                         _LOGGER.debug("Using selected courier %s for %s", courier.COURIER_NAME, number)
                         result = await _track_with_retry(courier, number)
                     else:
                         _LOGGER.warning("Selected courier %s not found, falling back to auto-detect", selected_courier)
-                        result = await track_with_auto_detect(number)
+                        result = await track_with_auto_detect(number, session)
                 else:
-                    # Auto-detect - try all couriers
-                    result = await track_with_auto_detect(number)
+                    # Ask the courier that found it last time before trying them all
+                    result = None
+                    detected = self._detected_courier(number, base_data)
+                    if detected:
+                        courier = get_courier(detected, session)
+                        if courier:
+                            _LOGGER.debug("Using detected courier %s for %s", courier.COURIER_NAME, number)
+                            result = await _track_with_retry(courier, number)
+                            if not result.success or result.status in ["Not Found", "Error"]:
+                                result = None
+                    if result is None:
+                        result = await track_with_auto_detect(number, session)
 
                 _LOGGER.debug("Result for %s: success=%s, courier=%s, status=%s",
                            number, result.success, result.courier, result.status)

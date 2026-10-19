@@ -14,7 +14,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, SIGNAL_TRACKING_ADDED, SIGNAL_TRACKING_CHANGED
 from .couriers.base import TrackingEvent, TrackingResult
-from .tracking import get_tracking_data, sensor_unique_id
+from .tracking import get_tracking_data, sensor_unique_id, status_text
 from . import GreekCourierDataUpdateCoordinator
 
 
@@ -114,10 +114,9 @@ class GreekCourierTrackingSensor(CoordinatorEntity, SensorEntity):
             return None
 
         # Check if we should stop tracking (delivered and stop_tracking_delivered is True)
-        if self._stop_tracking_delivered and result.status_category == "delivered":
-            return f"Delivered - Tracking Stopped"
-
-        return result.status
+        stopped = self._stop_tracking_delivered and result.status_category == "delivered"
+        language = self.hass.config.language if self.hass else None
+        return status_text(result, language, stopped=stopped)
 
     @property
     def available(self) -> bool:
@@ -144,7 +143,9 @@ class GreekCourierTrackingSensor(CoordinatorEntity, SensorEntity):
             "courier": result.courier,
             "courier_name": result.courier_name,
             "status": result.status,
+            "status_el": status_text(result, "el"),
             "status_category": result.status_category,
+            "estimated_delivery": result.estimated_delivery,
             "latest_date": latest.date if latest else None,
             "latest_time": latest.time if latest else None,
             "latest_place": latest.location if latest else None,

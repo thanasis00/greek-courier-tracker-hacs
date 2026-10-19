@@ -49,7 +49,7 @@ class BoxNowCourier(BaseCourier):
         }
         
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._client_session() as session:
                 async with async_timeout.timeout(30):
                     async with session.post(
                         self.API_URL,

@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+
+import aiohttp
 
 
 @dataclass
@@ -32,6 +36,8 @@ class TrackingResult:
     error_message: str | None = None
     raw_data: dict[str, Any] | None = None
     last_updated: str | None = None  # ISO timestamp of last successful update
+    estimated_delivery: str | None = None  # ISO date (or start/end) given by the courier
+    status_el: str | None = None  # Greek status text, when the courier provides one
 
 
 class BaseCourier(ABC):
@@ -40,6 +46,19 @@ class BaseCourier(ABC):
     # Subclasses must define these
     COURIER_CODE: str = ""
     COURIER_NAME: str = ""
+
+    def __init__(self, session: aiohttp.ClientSession | None = None) -> None:
+        """Use the given HTTP session (Home Assistant's shared one), if any."""
+        self._session = session
+
+    @asynccontextmanager
+    async def _client_session(self) -> AsyncIterator[aiohttp.ClientSession]:
+        """Yield the shared session, or a short-lived one when none was given."""
+        if self._session is not None:
+            yield self._session
+            return
+        async with aiohttp.ClientSession() as session:
+            yield session
     
     @abstractmethod
     async def track(self, tracking_number: str) -> TrackingResult:

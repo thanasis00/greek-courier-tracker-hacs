@@ -51,6 +51,7 @@ const STRINGS = {
     delivered: "Delivered",
     not_found: "Not found yet",
     unavailable: "Unavailable",
+    expected: "Expected",
   },
   el: {
     title: "Αποστολές",
@@ -71,6 +72,7 @@ const STRINGS = {
     delivered: "Παραδόθηκε",
     not_found: "Δεν βρέθηκε ακόμα",
     unavailable: "Μη διαθέσιμο",
+    expected: "Αναμένεται",
   },
 };
 
@@ -151,6 +153,12 @@ function parseWhen(date, time) {
     label: `${day}/${month}${sameYear ? "" : `/${year}`}${hhmm ? ` ${hhmm}` : ""}`,
     key: `${year}-${month}-${day} ${hhmm}`,
   };
+}
+
+/** "2026-10-21" or "2026-10-21T12:00+03:00" -> label for the expected delivery. */
+function parseEta(value) {
+  const match = String(value || "").match(/^(\d{4}-\d{2}-\d{2})(?:T(\d{2}:\d{2}))?/);
+  return match ? parseWhen(match[1], match[2] || "") : null;
 }
 
 class GreekCourierTrackerCard extends HTMLElement {
@@ -236,6 +244,9 @@ class GreekCourierTrackerCard extends HTMLElement {
           trackingNumber: attrs.tracking_number || "",
           courierName: attrs.courier && attrs.courier !== "unknown" ? courierLabels[attrs.courier] || attrs.courier_name || "" : "",
           state: stateObj.state,
+          statusEn: attrs.status || "",
+          statusEl: attrs.status_el || "",
+          eta: parseEta(attrs.estimated_delivery),
           category: attrs.delivered ? "delivered" : attrs.status_category || "unknown",
           place: attrs.latest_place || "",
           when: parseWhen(attrs.latest_date, attrs.latest_time),
@@ -267,10 +278,12 @@ class GreekCourierTrackerCard extends HTMLElement {
   _statusText(shipment) {
     const t = this._t;
     if (shipment.unavailable) return t.unavailable;
-    if (shipment.state === "Not Found") return t.not_found;
+    if (shipment.statusEn === "Not Found") return t.not_found;
+    if (this._lang !== "el") return shipment.statusEn || shipment.state;
     // Greek UI: prefer the courier's own Greek text when there is one
+    if (shipment.statusEl) return shipment.statusEl;
     const latest = shipment.events[0];
-    if (this._lang === "el" && latest && GREEK.test(latest.status || "")) return latest.status;
+    if (latest && GREEK.test(latest.status || "")) return latest.status;
     return shipment.state;
   }
 
@@ -451,12 +464,13 @@ class GreekCourierTrackerCard extends HTMLElement {
         ? `<span class="badge ok"><ha-icon icon="mdi:check"></ha-icon> ${escapeHtml(t.delivered)}</span>`
         : s.courierName ? `<span class="badge">${escapeHtml(s.courierName)}</span>` : "";
       const statusText = this._statusText(s);
-      const muted = s.unavailable || s.state === "Not Found";
+      const muted = s.unavailable || s.statusEn === "Not Found";
 
       const info = [
         delivered && s.courierName ? `<span>${escapeHtml(s.courierName)}</span>` : "",
         s.place ? `<span><ha-icon icon="mdi:map-marker-outline"></ha-icon>${escapeHtml(s.place)}</span>` : "",
         s.when ? `<span><ha-icon icon="mdi:clock-outline"></ha-icon>${escapeHtml(s.when.label)}</span>` : "",
+        !delivered && s.eta ? `<span><ha-icon icon="mdi:calendar-clock"></ha-icon>${escapeHtml(t.expected)} ${escapeHtml(s.eta.label)}</span>` : "",
         s.trackingNumber ? `<span class="mono">${escapeHtml(s.trackingNumber)}</span>` : "",
       ].filter(Boolean).join("");
       const actions = [

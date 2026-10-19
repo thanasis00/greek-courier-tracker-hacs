@@ -2,6 +2,9 @@
 
 import asyncio
 import logging
+import re
+
+import aiohttp
 
 from .base import BaseCourier, TrackingResult
 from .elta import ELTACourier
@@ -45,31 +48,50 @@ COURIER_REGISTRY: dict[str, type[BaseCourier]] = {
 MAX_RETRIES = 3
 
 
-def get_courier(courier_code: str) -> BaseCourier | None:
+def get_courier(
+    courier_code: str, session: aiohttp.ClientSession | None = None
+) -> BaseCourier | None:
     """Get a courier instance by code.
 
     Args:
         courier_code: The courier code (e.g., 'elta', 'acs')
+        session: Shared HTTP session to use (e.g. Home Assistant's)
 
     Returns:
         Courier instance or None if not found
     """
     courier_class = COURIER_REGISTRY.get(courier_code)
     if courier_class:
-        return courier_class()
+        return courier_class(session)
     return None
 
 
-async def track_with_auto_detect(tracking_number: str) -> TrackingResult:
-    """Track a shipment by trying ALL couriers to find the correct one.
+def couriers_by_likelihood(tracking_number: str) -> list[type[BaseCourier]]:
+    """Return all couriers, those whose number format matches first."""
+    tn = tracking_number.strip().upper()
+    matching = [
+        courier_class
+        for courier_class in COURIER_REGISTRY.values()
+        if any(re.match(pattern, tn) for pattern in getattr(courier_class, "PATTERNS", []))
+    ]
+    return matching + [
+        courier_class for courier_class in COURIER_REGISTRY.values() if courier_class not in matching
+    ]
+
+
+async def track_with_auto_detect(
+    tracking_number: str, session: aiohttp.ClientSession | None = None
+) -> TrackingResult:
+    """Track a shipment by trying the couriers until one knows the number.
 
     This function:
-    1. Tries EVERY courier in the registry
+    1. Tries the couriers whose number format matches first, then the rest
     2. Uses retry logic (up to 3 attempts) for each courier
     3. Returns the first result with valid tracking data (not "Not Found" or "Error")
 
     Args:
         tracking_number: The tracking number to track
+        session: Shared HTTP session to use (e.g. Home Assistant's)
 
     Returns:
         TrackingResult from the first courier that successfully tracks the package
@@ -84,8 +106,8 @@ async def track_with_auto_detect(tracking_number: str) -> TrackingResult:
 
     last_result = None
 
-    for courier_code, courier_class in COURIER_REGISTRY.items():
-        courier = courier_class()
+    for courier_class in couriers_by_likelihood(tn):
+        courier = courier_class(session)
 
         _LOGGER.debug(
             "Trying %s for tracking number %s",
@@ -171,6 +193,10 @@ async def _track_with_retry(
                         attempt + 1
                     )
                     return result
+
+            # Retrying a rate limited request only makes it worse
+            if not result.success and (result.error_message or "").startswith("HTTP error: 429"):
+                return result
 
             # If we got a clear "Not Found" from the courier, don't retry
             if result.success and result.status == "Not Found":
