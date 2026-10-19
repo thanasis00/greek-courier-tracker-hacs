@@ -33,71 +33,79 @@ Restart Home Assistant.
 
 1. Settings → Devices & Services → Add Integration
 2. Search "Greek Courier Tracker"
-3. Enter tracking numbers (comma-separated or one per line)
-4. Set scan interval (default: 30 minutes)
+3. Optionally enter your first tracking number (you can add more any time)
+4. Set the scan interval (default: 1 hour)
 
-### Managing Tracking Numbers
+## Adding Tracking Numbers
 
-Settings → Devices & Services → Greek Courier Tracker → ⚙️ Configure
+The courier is detected automatically unless you pick one. Use whichever is handiest:
 
-- Add new tracking numbers with custom names
-- Edit name and settings (like "stop when delivered")
-- Delete individual tracking numbers
+- **Dashboard card**: type the tracking number, an optional name and an optional courier, then press Add (see below).
+- **Shipments to-do list**: add an item such as `SE123456789GR New shoes` to the *Shipments* list (To-do lists in the sidebar, the mobile app or Assist). Delivered shipments are checked off automatically and deleting an item stops tracking it.
+- **Actions**: call `greek_courier_tracker.add_tracking` / `greek_courier_tracker.remove_tracking` from scripts and automations:
 
-## Lovelace Card
+  ```yaml
+  action: greek_courier_tracker.add_tracking
+  data:
+    tracking_number: SE123456789GR
+    name: New shoes          # optional
+    courier: elta            # optional, default: auto
+  ```
 
-Auto-discovery card:
+- **Configure**: Settings → Devices & Services → Greek Courier Tracker → ⚙️ Configure, then add, edit or remove tracking numbers or change the scan interval.
+
+## Dashboard Card
+
+The integration ships its own card; there's nothing else to install. Edit a dashboard → Add card → search "Greek Courier Tracker", or add it in YAML:
+
+```yaml
+type: custom:greek-courier-tracker-card
+```
+
+Each shipment shows its progress (created → in transit → delivered), latest location and time, and its full history on click. The card follows your Home Assistant language (Greek or English).
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `title` | Shipments | Card title |
+| `show_add_form` | `true` | Show the form for adding tracking numbers |
+| `show_delivered` | `true` | Show delivered shipments |
+| `entities` | all | Only show these tracking sensors |
+| `entry_id` | first entry | Config entry that new numbers are added to |
+
+If the card doesn't show up right after an update, refresh the browser page.
+
+<details>
+<summary>Markdown card alternative</summary>
 
 ```yaml
 type: markdown
 title: "📦 Active Shipments"
 content: >
-  {% set trackers = states.sensor | selectattr('entity_id', 'search', 'greek_courier_tracker_') | list %}
-  
-  {% if trackers | length == 0 %}
-    No shipments are currently being tracked.
-  {% else %}
+    {% set trackers = states.sensor | selectattr('entity_id', 'search', 'greek_courier_tracker_') | list %}
+    {% if trackers | length == 0 %}
+    *No shipments are currently being tracked.*
+    {% else %}
     {% for tracker in trackers %}
-    * **{{ tracker.name | replace('Greek Courier Tracker ', '') }}**: {{ tracker.state }}
+    {%- set t_num = tracker.attributes.tracking_number | default('N/A') -%}
+    {%- set c_name = tracker.attributes.courier_name | default('Unknown Courier') -%}
+    {%- set display_name = tracker.attributes.tracking_name | default(t_num) %}
+    <div style="border: 1px solid var(--divider-color, #444); padding: 16px; border-radius: 10px; margin-bottom: 16px; background-color: var(--secondary-background-color, rgba(0,0,0,0.1));">
+    <h3 style="margin-top: 0px; margin-bottom: 12px;">📦 {{ display_name }}</h3>
+    <b>Courier:</b> {{ c_name }}<br>
+    <b>Tracking:</b> {{ t_num }}<br>
+    <b>Status:</b> {{ tracker.state }}
+    {%- if tracker.attributes.latest_place %}<br>
+    <b>Location:</b> {{ tracker.attributes.latest_place }}
+    {%- endif %}
+    {%- if tracker.attributes.latest_date %}<br>
+    <b>Updated:</b> {{ tracker.attributes.latest_date }} @ {{ tracker.attributes.latest_time }}
+    {%- endif %}
+    </div>
     {% endfor %}
-  {% endif %}
+    {% endif %}
 ```
 
-Enhanced card:
-
-```yaml
-type: markdown
-title: "📦 Active Shipments"
-content: >
-  {% set trackers = states.sensor | selectattr('entity_id', 'search', 'greek_courier_tracker_') | list %}
-  {% if trackers | length == 0 %}
-  *No shipments are currently being tracked.*
-  {% else %}
-  {% for tracker in trackers %}
-  {%- set t_num = tracker.attributes.tracking_number | default('N/A') -%}
-  {%- set c_name = tracker.attributes.courier_name | default('Unknown Courier') -%}
-  {%- set f_name = tracker.name -%}
-  {%- if 'Greek Courier Tracker' in f_name -%}
-  {%- set display_name = t_num -%}
-  {%- else -%}
-  {%- set display_name = f_name | replace(t_num, '') | trim | title -%}
-  {%- set display_name = display_name if display_name | length > 0 else t_num -%}
-  {%- endif %}
-  <div style="border: 1px solid var(--divider-color, #444); padding: 16px; border-radius: 10px; margin-bottom: 16px; background-color: var(--secondary-background-color, rgba(0,0,0,0.1));">
-  <h3 style="margin-top: 0px; margin-bottom: 12px;">📦 {{ display_name }}</h3>
-  <b>Courier:</b> {{ c_name }}<br>
-  <b>Tracking:</b> {{ t_num }}<br>
-  <b>Status:</b> {{ tracker.state }}
-  {%- if tracker.attributes.latest_place %}<br>
-  <b>Location:</b> {{ tracker.attributes.latest_place }}
-  {%- endif %}
-  {%- if tracker.attributes.latest_date %}<br>
-  <b>Updated:</b> {{ tracker.attributes.latest_date }} @ {{ tracker.attributes.latest_time }}
-  {%- endif %}
-  </div>
-  {% endfor %}
-  {% endif %}
-```
+</details>
 
 ## Automation Examples
 
@@ -188,6 +196,7 @@ mode: single
 | Attribute | Description |
 |-----------|-------------|
 | `tracking_number` | The tracking number |
+| `tracking_name` | The name you gave the shipment |
 | `courier_name` | Full courier name |
 | `status` | Current status (translated) |
 | `status_category` | delivered, in_transit, created, unknown |

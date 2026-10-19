@@ -145,6 +145,11 @@ class GreekCourierTrackerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         _LOGGER.info("Config flow - async_step_user called")
         errors: dict[str, str] = {}
 
+        # One entry holds all tracking numbers; more are added from Configure,
+        # the dashboard card, the Shipments to-do list or the add_tracking action
+        if self._async_current_entries():
+            return self.async_abort(reason="single_instance_allowed")
+
         if user_input is not None:
             _LOGGER.debug("User input received: %s", user_input)
             tracking_number = user_input.get(CONF_TRACKING_NUMBERS, "").strip().upper()
@@ -152,26 +157,24 @@ class GreekCourierTrackerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             selected_courier = user_input.get(CONF_COURIER, CourierType.AUTO)
             scan_interval = user_input.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
 
-            if not tracking_number:
-                _LOGGER.error("No tracking number provided")
-                errors["base"] = "no_tracking_numbers"
-            else:
-                # Create single tracking entry
-                tracking_data = [{
+            # The first tracking number is optional
+            tracking_data = []
+            if tracking_number:
+                tracking_data.append({
                     "tracking_number": tracking_number,
                     "name": name if name else tracking_number,
                     "stop_tracking_delivered": False,
                     "courier": selected_courier,
-                }]
-                _LOGGER.info("Parsed tracking data: %s", tracking_data)
+                })
+            _LOGGER.info("Parsed tracking data: %s", tracking_data)
 
-                data = {
-                    CONF_TRACKING_NUMBERS: tracking_data,
-                    CONF_SCAN_INTERVAL: scan_interval,
-                    "name": DEFAULT_NAME,
-                }
-                _LOGGER.info("Creating config entry with data: %s", data)
-                return self.async_create_entry(title=DEFAULT_NAME, data=data)
+            data = {
+                CONF_TRACKING_NUMBERS: tracking_data,
+                CONF_SCAN_INTERVAL: scan_interval,
+                "name": DEFAULT_NAME,
+            }
+            _LOGGER.info("Creating config entry with data: %s", data)
+            return self.async_create_entry(title=DEFAULT_NAME, data=data)
 
         _LOGGER.debug("Showing form to user")
         
@@ -189,7 +192,7 @@ class GreekCourierTrackerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         
         schema = vol.Schema(
             {
-                vol.Required(CONF_TRACKING_NUMBERS): str,
+                vol.Optional(CONF_TRACKING_NUMBERS, default=""): str,
                 vol.Optional(CONF_TRACKING_NAME, default=""): str,
                 vol.Optional(CONF_COURIER, default=CourierType.AUTO): courier_selector,
                 vol.Optional(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): cv.positive_int,
@@ -243,6 +246,7 @@ class GreekCourierTrackerOptionsFlow(config_entries.OptionsFlow):
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         super().__init__()
         self._config_entry = config_entry
+        self._selected_tracking: str | None = None
         _LOGGER.debug("Options flow initialized for entry: %s", config_entry.entry_id)
 
         # Migrate old data format
@@ -273,41 +277,88 @@ class GreekCourierTrackerOptionsFlow(config_entries.OptionsFlow):
                 for number in existing_numbers
             ]
         else:
-            # Ensure courier field exists
-            for item in existing_numbers:
-                if isinstance(item, dict) and "courier" not in item:
-                    item["courier"] = CourierType.AUTO
-            self.migrated_data = existing_numbers
+            # Work on copies: changing the entry's own list in place makes the
+            # saved options look unchanged, so Home Assistant would skip saving
+            self.migrated_data = [
+                {"courier": CourierType.AUTO, **item} if isinstance(item, dict) else item
+                for item in existing_numbers
+            ]
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None):
-        """Manage the options - show list of tracking numbers with actions."""
+        """Show the options menu with the tracked numbers."""
         _LOGGER.info("Options flow - async_step_init called")
 
+        menu_options = ["add_tracking"]
+        if self.migrated_data:
+            menu_options += ["edit_select", "delete_select"]
+        menu_options.append("settings")
+
+        return self.async_show_menu(
+            step_id="init",
+            menu_options=menu_options,
+            description_placeholders={
+                "tracking_list": self._format_tracking_list(self._tracking_list()),
+            },
+        )
+
+    async def async_step_edit_select(self, user_input: dict[str, Any] | None = None):
+        """Choose the tracking number to edit."""
         if user_input is not None:
-            _LOGGER.debug("Options user input received: %s", user_input)
+            self._selected_tracking = user_input["tracking_number"]
+            return await self.async_step_edit_tracking()
 
-            # Handle action button presses
-            if "delete_tracking" in user_input:
-                return await self.async_step_confirm_delete(tracking_number=user_input["delete_tracking"])
+        schema = vol.Schema({
+            vol.Required("tracking_number"): self._tracking_selector(),
+        })
+        return self.async_show_form(step_id="edit_select", data_schema=schema)
 
-            if "edit_tracking" in user_input:
-                return await self.async_step_edit_tracking(tracking_number=user_input["edit_tracking"])
+    async def async_step_delete_select(self, user_input: dict[str, Any] | None = None):
+        """Choose the tracking numbers to stop tracking."""
+        if user_input is not None:
+            selected = user_input.get("tracking_numbers") or []
+            if isinstance(selected, str):
+                selected = [selected]
 
-            if "add_tracking" in user_input:
-                return await self.async_step_add_tracking()
+            self.migrated_data = [
+                item for item in self.migrated_data
+                if (item.get("tracking_number", item) if isinstance(item, dict) else item) not in selected
+            ]
+            _LOGGER.info("Deleted tracking numbers: %s", selected)
+            return self.async_create_entry(title="", data=self._options_data())
 
-            # User submitted the main form with updated scan interval
-            data = {
-                CONF_TRACKING_NUMBERS: self.migrated_data,
-                CONF_SCAN_INTERVAL: user_input.get(CONF_SCAN_INTERVAL, self.config_entry.options.get(
-                    CONF_SCAN_INTERVAL,
-                    self.config_entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
-                )),
-            }
-            _LOGGER.info("Updating options with data: %s", data)
-            return self.async_create_entry(title="", data=data)
+        schema = vol.Schema({
+            vol.Required("tracking_numbers"): self._tracking_selector(multiple=True),
+        })
+        return self.async_show_form(step_id="delete_select", data_schema=schema)
 
-        # Build list of tracking numbers for display
+    async def async_step_settings(self, user_input: dict[str, Any] | None = None):
+        """Change the scan interval."""
+        if user_input is not None:
+            return self.async_create_entry(
+                title="", data=self._options_data(scan_interval=user_input[CONF_SCAN_INTERVAL])
+            )
+
+        schema = vol.Schema({
+            vol.Required(CONF_SCAN_INTERVAL, default=self._scan_interval()): cv.positive_int,
+        })
+        return self.async_show_form(step_id="settings", data_schema=schema)
+
+    def _scan_interval(self) -> int:
+        """Return the current scan interval."""
+        return self.config_entry.options.get(
+            CONF_SCAN_INTERVAL,
+            self.config_entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
+        )
+
+    def _options_data(self, scan_interval: int | None = None) -> dict[str, Any]:
+        """Build the options to save."""
+        return {
+            CONF_TRACKING_NUMBERS: self.migrated_data,
+            CONF_SCAN_INTERVAL: scan_interval if scan_interval is not None else self._scan_interval(),
+        }
+
+    def _tracking_list(self) -> list[dict[str, Any]]:
+        """Return the tracked numbers with display names."""
         tracking_list = []
         for item in self.migrated_data:
             tracking_num = item.get("tracking_number", item) if isinstance(item, dict) else item
@@ -322,38 +373,29 @@ class GreekCourierTrackerOptionsFlow(config_entries.OptionsFlow):
                 "stop_tracking_delivered": stop_tracking,
                 "courier": courier_name,
             })
+        return tracking_list
 
-        _LOGGER.debug("Showing tracking list: %d items", len(tracking_list))
+    def _tracking_selector(self, multiple: bool = False):
+        """Build a selector with the tracked numbers."""
+        options = {
+            item["tracking_number"]: (
+                f"{item['name']} ({item['tracking_number']})"
+                if item["name"] != item["tracking_number"]
+                else item["tracking_number"]
+            )
+            for item in self._tracking_list()
+        }
 
-        # Show form with list of tracking numbers and action buttons
-        options_schema = vol.Schema({
-            vol.Optional(CONF_SCAN_INTERVAL, default=self.config_entry.options.get(
-                CONF_SCAN_INTERVAL,
-                self.config_entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
-            )): cv.positive_int,
-        })
-
-        # Add buttons for each tracking number
-        for i, item in enumerate(tracking_list):
-            options_schema = options_schema.extend({
-                vol.Optional(f"edit_{i}", default=False): bool,
-            })
-            options_schema = options_schema.extend({
-                vol.Optional(f"delete_{i}", default=False): bool,
-            })
-
-        # Add tracking button
-        options_schema = options_schema.extend({
-            vol.Optional("add_tracking", default=False): bool,
-        })
-
-        return self.async_show_form(
-            step_id="init",
-            data_schema=options_schema,
-            description_placeholders={
-                "tracking_list": self._format_tracking_list(tracking_list),
-            }
-        )
+        if HAS_SELECTORS:
+            return SelectSelector(
+                SelectSelectorConfig(
+                    options=[{"value": value, "label": label} for value, label in options.items()],
+                    mode=SelectSelectorMode.DROPDOWN,
+                    multiple=multiple,
+                )
+            )
+        # Fallback for testing
+        return cv.multi_select(options) if multiple else vol.In(list(options))
 
     async def async_step_add_tracking(self, user_input: dict[str, Any] | None = None):
         """Add a new tracking number."""
@@ -427,6 +469,11 @@ class GreekCourierTrackerOptionsFlow(config_entries.OptionsFlow):
         """Edit an existing tracking number."""
         errors: dict[str, str] = {}
 
+        # The number comes from edit_select; the form submit doesn't pass it again
+        if tracking_number is not None:
+            self._selected_tracking = tracking_number
+        tracking_number = self._selected_tracking
+
         # Find the tracking item
         tracking_item = None
         tracking_index = None
@@ -497,61 +544,18 @@ class GreekCourierTrackerOptionsFlow(config_entries.OptionsFlow):
             }
         )
 
-    async def async_step_confirm_delete(self, user_input: dict[str, Any] | None = None, tracking_number: str | None = None):
-        """Confirm deletion of a tracking number."""
-        errors: dict[str, str] = {}
-
-        if user_input is not None:
-            if user_input.get("confirm_delete"):
-                self.migrated_data = [
-                    item for item in self.migrated_data
-                    if (item.get("tracking_number", item) if isinstance(item, dict) else item) != tracking_number
-                ]
-
-                _LOGGER.info("Deleted tracking number: %s", tracking_number)
-
-                # Save and go back to main menu
-                data = {
-                    CONF_TRACKING_NUMBERS: self.migrated_data,
-                    CONF_SCAN_INTERVAL: self.config_entry.options.get(
-                        CONF_SCAN_INTERVAL,
-                        self.config_entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
-                    ),
-                }
-                return self.async_create_entry(title="", data=data)
-            else:
-                return await self.async_step_init()
-
-        schema = vol.Schema({
-            vol.Optional("confirm_delete", default=False): bool,
-        })
-
-        return self.async_show_form(
-            step_id="confirm_delete",
-            data_schema=schema,
-            errors=errors,
-            description_placeholders={
-                "tracking_number": tracking_number,
-                "name": next(
-                    (item.get("name", tracking_number) for item in self.migrated_data
-                     if (item.get("tracking_number", item) if isinstance(item, dict) else item) == tracking_number),
-                    tracking_number
-                ),
-            }
-        )
-
     def _format_tracking_list(self, tracking_list: list[dict]) -> str:
         """Format tracking list for display in UI."""
         if not tracking_list:
-            return "No tracking numbers configured"
+            return "–"
 
         lines = []
         for item in tracking_list:
             name = item.get("name", item.get("tracking_number", "Unknown"))
             tracking_num = item.get("tracking_number", "Unknown")
             courier = item.get("courier", "Auto")
-            stop_tracking = "🚫 Stop after delivery" if item.get("stop_tracking_delivered") else "✓ Continue tracking"
 
-            lines.append(f"• {name} ({tracking_num}) - {courier} - {stop_tracking}")
+            label = f"{name} ({tracking_num})" if name != tracking_num else tracking_num
+            lines.append(f"• {label} · {courier}")
 
         return "\n".join(lines)

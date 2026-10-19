@@ -1,0 +1,46 @@
+add_tracking:
+  fields:
+    tracking_number:
+      required: true
+      example: "SE123456789GR"
+      selector:
+        text:
+    name:
+      example: "New shoes"
+      selector:
+        text:
+    courier:
+      default: auto
+      selector:
+        select:
+          translation_key: courier
+          options:
+            - auto
+            - acs
+            - box_now
+            - courier_center
+            - elta
+            - geniki
+            - skroutz
+            - speedex
+            - svuum
+    stop_tracking_delivered:
+      default: false
+      selector:
+        boolean:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: greek_courier_tracker
+
+remove_tracking:
+  fields:
+    tracking_number:
+      required: true
+      example: "SE123456789GR"
+      selector:
+        text:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: greek_courier_tracker

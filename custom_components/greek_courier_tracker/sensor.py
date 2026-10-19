@@ -6,16 +6,15 @@ from typing import Any
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import (
-    CONF_TRACKING_NUMBERS,
-    CONF_TRACKING_NAME,
-    DOMAIN,
-)
+from .const import DOMAIN, SIGNAL_TRACKING_ADDED, SIGNAL_TRACKING_CHANGED
 from .couriers.base import TrackingEvent, TrackingResult
+from .tracking import get_tracking_data, sensor_unique_id
 from . import GreekCourierDataUpdateCoordinator
 
 
@@ -27,42 +26,39 @@ async def async_setup_entry(
     """Set up sensors for each tracking number."""
     coordinator: GreekCourierDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    # Get tracking data with names
-    tracking_data = _get_tracking_data(entry)
-
-    sensors = [
-        GreekCourierTrackingSensor(
-            coordinator,
-            entry,
-            tracking_number=item.get("tracking_number", item) if isinstance(item, dict) else item,
-            tracking_name=item.get("name", item) if isinstance(item, dict) else item,
-            stop_tracking_delivered=item.get("stop_tracking_delivered", False) if isinstance(item, dict) else False,
-        )
-        for item in tracking_data
-    ]
-    async_add_entities(sensors)
-
-
-def _get_tracking_data(entry: ConfigEntry) -> list:
-    """Get tracking data from entry data or options."""
-    # Try options first (where updates are stored), then data
-    tracking_data = entry.options.get(
-        CONF_TRACKING_NUMBERS,
-        entry.data.get(CONF_TRACKING_NUMBERS, [])
-    )
-
-    # Migrate old format (list of strings) to new format (list of dicts)
-    if tracking_data and isinstance(tracking_data[0], str):
+    def _sensors(items: list[dict[str, Any]]) -> list[GreekCourierTrackingSensor]:
         return [
-            {
-                "tracking_number": number,
-                "name": number,
-                "stop_tracking_delivered": False,
-            }
-            for number in tracking_data
+            GreekCourierTrackingSensor(
+                coordinator,
+                entry,
+                tracking_number=item["tracking_number"],
+                tracking_name=item["name"],
+                stop_tracking_delivered=item["stop_tracking_delivered"],
+            )
+            for item in items
         ]
 
-    return tracking_data
+    sensors = _sensors(get_tracking_data(entry))
+    _remove_stale_sensors(hass, entry, {sensor.unique_id for sensor in sensors})
+    async_add_entities(sensors)
+
+    # Numbers added later (card, to-do list, actions, Configure) get a sensor
+    # without reloading the integration
+    @callback
+    def _async_add_sensors(items: list[dict[str, Any]]) -> None:
+        async_add_entities(_sensors(items))
+
+    entry.async_on_unload(
+        async_dispatcher_connect(hass, SIGNAL_TRACKING_ADDED.format(entry_id=entry.entry_id), _async_add_sensors)
+    )
+
+
+def _remove_stale_sensors(hass: HomeAssistant, entry: ConfigEntry, unique_ids: set[str]) -> None:
+    """Remove sensors of tracking numbers that are no longer tracked."""
+    registry = er.async_get(hass)
+    for registry_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if registry_entry.domain == "sensor" and registry_entry.unique_id not in unique_ids:
+            registry.async_remove(registry_entry.entity_id)
 
 
 class GreekCourierTrackingSensor(CoordinatorEntity, SensorEntity):
@@ -81,12 +77,34 @@ class GreekCourierTrackingSensor(CoordinatorEntity, SensorEntity):
         self._tracking_number = tracking_number
         self._tracking_name = tracking_name
         self._stop_tracking_delivered = stop_tracking_delivered
-        self._attr_unique_id = f"{entry.entry_id}_{tracking_number}"
+        self._attr_unique_id = sensor_unique_id(entry.entry_id, tracking_number)
         # Use the custom name as the entity name
         self._attr_name = tracking_name
         # Set entity_id with greek_courier_tracker prefix
         self._attr_has_entity_name = True
         self.entity_id = f"sensor.greek_courier_tracker_{tracking_number.lower()}"
+
+    async def async_added_to_hass(self) -> None:
+        """Follow name and settings changes of this tracking number."""
+        await super().async_added_to_hass()
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                SIGNAL_TRACKING_CHANGED.format(entry_id=self._entry.entry_id),
+                self._async_config_changed,
+            )
+        )
+
+    @callback
+    def _async_config_changed(self, configs: dict[str, dict[str, Any]]) -> None:
+        """Apply a new name or "stop when delivered" setting."""
+        config = configs.get(self._tracking_number)
+        if config is None:
+            return
+        self._tracking_name = config["name"]
+        self._attr_name = config["name"]
+        self._stop_tracking_delivered = config["stop_tracking_delivered"]
+        self.async_write_ha_state()
 
     @property
     def native_value(self) -> str | None:
@@ -122,6 +140,7 @@ class GreekCourierTrackingSensor(CoordinatorEntity, SensorEntity):
         latest = result.latest_event
         return {
             "tracking_number": result.tracking_number,
+            "tracking_name": self._tracking_name,
             "courier": result.courier,
             "courier_name": result.courier_name,
             "status": result.status,

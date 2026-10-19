@@ -4,31 +4,70 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass, field
 from datetime import timedelta
+from pathlib import Path
+from typing import Any
 
 import async_timeout
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.const import Platform
+from homeassistant.loader import async_get_integration
 
 from .const import (
-    CONF_SCAN_INTERVAL,
-    CONF_TRACKING_NUMBERS,
-    DEFAULT_SCAN_INTERVAL,
+    CARD_FILENAME,
+    CARD_URL_BASE,
     DOMAIN,
+    SIGNAL_TRACKING_ADDED,
+    SIGNAL_TRACKING_CHANGED,
 )
 from .couriers import track_with_auto_detect
 from .couriers.base import TrackingResult
+from .services import async_setup_services
+from .tracking import get_scan_interval, get_tracking_data, sensor_unique_id
 
-PLATFORMS: list[Platform] = [Platform.SENSOR]
+PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.TODO]
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 _LOGGER = logging.getLogger(__name__)
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
-    """Set up the integration from configuration.yaml (not used)."""
+    """Set up the integration actions and the dashboard card."""
     _LOGGER.info("Setting up Greek Courier Tracker integration")
+    async_setup_services(hass)
+    await _async_register_card(hass)
     return True
+
+
+async def _async_register_card(hass: HomeAssistant) -> None:
+    """Serve the bundled dashboard card and load it in the frontend."""
+    if getattr(hass, "http", None) is None or hass.data.get(f"{DOMAIN}_card_registered"):
+        return
+
+    from homeassistant.components.frontend import add_extra_js_url
+
+    card_path = Path(__file__).parent / "frontend" / CARD_FILENAME
+    card_url = f"{CARD_URL_BASE}/{CARD_FILENAME}"
+
+    try:
+        from homeassistant.components.http import StaticPathConfig
+
+        await hass.http.async_register_static_paths(
+            [StaticPathConfig(card_url, str(card_path), False)]
+        )
+    except ImportError:
+        # Home Assistant before 2024.7
+        hass.http.register_static_path(card_url, str(card_path), False)
+
+    # Version query string so browsers pick up a new card after an update
+    integration = await async_get_integration(hass, DOMAIN)
+    add_extra_js_url(hass, f"{card_url}?v={integration.version}")
+    hass.data[f"{DOMAIN}_card_registered"] = True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -38,28 +77,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.debug("Entry options: %s", entry.options)
 
     try:
-        tracking_data = _get_tracking_data(entry)
-        scan_interval = _get_scan_interval(entry)
+        tracking_data = get_tracking_data(entry)
+        scan_interval = get_scan_interval(entry)
 
         # Extract just the tracking numbers for the coordinator
-        tracking_numbers = [
-            item.get("tracking_number", item) if isinstance(item, dict) else item
-            for item in tracking_data
-        ]
+        tracking_numbers = [item["tracking_number"] for item in tracking_data]
 
         # Build a map of tracking_number -> config (name, stop_tracking_delivered, etc.)
-        tracking_configs = {
-            item.get("tracking_number", item) if isinstance(item, dict) else item: item
-            for item in tracking_data
-        }
+        tracking_configs = {item["tracking_number"]: item for item in tracking_data}
 
         _LOGGER.info("Tracking numbers: %s", tracking_numbers)
         _LOGGER.info("Tracking configs: %s", tracking_configs)
-        _LOGGER.info("Scan interval: %s minutes", scan_interval)
+        _LOGGER.info("Scan interval: %s hours", scan_interval)
 
+        # An empty list is fine: numbers can be added later from the card,
+        # the to-do list or the add_tracking action
         if not tracking_numbers:
-            _LOGGER.error("No tracking numbers provided!")
-            return False
+            _LOGGER.info("No tracking numbers configured yet")
 
         coordinator = GreekCourierDataUpdateCoordinator(
             hass=hass,
@@ -96,52 +130,46 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Handle options update."""
-    _LOGGER.info("Config entry updated, reloading: %s", entry.entry_id)
-    await hass.config_entries.async_reload(entry.entry_id)
+    """Apply changed options without reloading the entry.
+
+    Only the added (or re-assigned) numbers are fetched; the other sensors keep
+    their state instead of going unavailable during a reload.
+    """
+    coordinator: GreekCourierDataUpdateCoordinator | None = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if coordinator is None:
+        _LOGGER.info("Config entry updated, reloading: %s", entry.entry_id)
+        await hass.config_entries.async_reload(entry.entry_id)
+        return
+
+    changes = await coordinator.async_apply_tracking_data(
+        get_tracking_data(entry), get_scan_interval(entry)
+    )
+    _LOGGER.info(
+        "Tracking numbers updated: added %s, removed %s, changed %s",
+        [item["tracking_number"] for item in changes.added],
+        changes.removed,
+        list(changes.changed),
+    )
+
+    registry = er.async_get(hass)
+    for number in changes.removed:
+        entity_id = registry.async_get_entity_id("sensor", DOMAIN, sensor_unique_id(entry.entry_id, number))
+        if entity_id:
+            registry.async_remove(entity_id)
+
+    if changes.added:
+        async_dispatcher_send(hass, SIGNAL_TRACKING_ADDED.format(entry_id=entry.entry_id), changes.added)
+    if changes.changed:
+        async_dispatcher_send(hass, SIGNAL_TRACKING_CHANGED.format(entry_id=entry.entry_id), changes.changed)
 
 
-def _get_tracking_data(entry: ConfigEntry) -> list:
-    """Get tracking data from entry data or options."""
-    if entry.options and CONF_TRACKING_NUMBERS in entry.options:
-        data = list(entry.options.get(CONF_TRACKING_NUMBERS, []))
-        _LOGGER.debug("Got tracking data from options: %s", data)
-        return _migrate_tracking_data(data)
+@dataclass
+class TrackingChanges:
+    """What changed when new tracking options were applied."""
 
-    data = list(entry.data.get(CONF_TRACKING_NUMBERS, []))
-    _LOGGER.debug("Got tracking data from data: %s", data)
-    return _migrate_tracking_data(data)
-
-
-def _migrate_tracking_data(data: list) -> list:
-    """Migrate old tracking number format to new format."""
-    if not data:
-        return []
-
-    # Check if migration is needed (old format: list of strings)
-    if isinstance(data[0], str):
-        _LOGGER.info("Migrating tracking numbers to new format with names")
-        return [
-            {
-                "tracking_number": number,
-                "name": number,
-                "stop_tracking_delivered": False,
-            }
-            for number in data
-        ]
-
-    return data
-
-
-def _get_scan_interval(entry: ConfigEntry) -> int:
-    """Get scan interval from entry data or options."""
-    if entry.options and CONF_SCAN_INTERVAL in entry.options:
-        interval = int(entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL))
-        _LOGGER.debug("Got scan interval from options: %s", interval)
-        return interval
-    interval = int(entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL))
-    _LOGGER.debug("Got scan interval from data: %s", interval)
-    return interval
+    added: list[dict[str, Any]] = field(default_factory=list)
+    removed: list[str] = field(default_factory=list)
+    changed: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, TrackingResult]]):
@@ -162,7 +190,64 @@ class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Tracking
         )
         self.tracking_numbers = tracking_numbers
         self.tracking_configs = tracking_configs
+        self.scan_interval = scan_interval
+        self._apply_lock = asyncio.Lock()
         _LOGGER.debug("Coordinator initialized with %d tracking numbers", len(tracking_numbers))
+
+    def _current_data(self) -> dict[str, TrackingResult]:
+        """Return the data of the numbers that are still tracked."""
+        return {
+            number: result
+            for number, result in (self.data or {}).items()
+            if number in self.tracking_configs
+        }
+
+    async def async_apply_tracking_data(
+        self, tracking_data: list[dict[str, Any]], scan_interval: int
+    ) -> TrackingChanges:
+        """Switch to a new list of tracking items, fetching only what is new."""
+        async with self._apply_lock:
+            new_configs = {item["tracking_number"]: item for item in tracking_data}
+            old_configs = self.tracking_configs
+
+            changes = TrackingChanges(
+                added=[item for number, item in new_configs.items() if number not in old_configs],
+                removed=[number for number in old_configs if number not in new_configs],
+                changed={
+                    number: item
+                    for number, item in new_configs.items()
+                    if number in old_configs and item != old_configs[number]
+                },
+            )
+            # New numbers, and numbers assigned to another courier, are fetched now
+            refetch = [item["tracking_number"] for item in changes.added] + [
+                number
+                for number, item in changes.changed.items()
+                if item.get("courier") != old_configs[number].get("courier")
+            ]
+
+            self.tracking_numbers = list(new_configs)
+            self.tracking_configs = new_configs
+
+            if scan_interval != self.scan_interval:
+                self.scan_interval = scan_interval
+                self.update_interval = timedelta(hours=scan_interval)
+
+            fetched: dict[str, TrackingResult] = {}
+            if refetch:
+                base = {number: result for number, result in self._current_data().items() if number not in refetch}
+                fetched = await self._async_fetch(refetch, base)
+
+            # Merge into the current data (a scheduled refresh may have run meanwhile)
+            data = self._current_data()
+            for number in refetch:
+                data.pop(number, None)
+                if number in fetched:
+                    data[number] = fetched[number]
+
+            # Notifies the entities and restarts the refresh timer (new interval)
+            self.async_set_updated_data(data)
+            return changes
 
     async def _async_update_data(self) -> dict[str, TrackingResult]:
         """Fetch latest data for all tracking numbers."""
@@ -191,7 +276,15 @@ class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Tracking
 
         if not active_numbers:
             _LOGGER.debug("No active tracking numbers to update")
-            return self.data or {}
+            return self._current_data()
+
+        return await self._async_fetch(active_numbers, self._current_data())
+
+    async def _async_fetch(
+        self, numbers: list[str], base_data: dict[str, TrackingResult]
+    ) -> dict[str, TrackingResult]:
+        """Track the given numbers and merge the results into base_data."""
+        active_numbers = numbers
 
         async def _track_one(number: str) -> TrackingResult:
             _LOGGER.debug("Tracking: %s", number)
@@ -232,10 +325,10 @@ class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Tracking
         except asyncio.TimeoutError:
             _LOGGER.error("Timeout while fetching tracking updates")
             # Keep existing data on timeout
-            return self.data or {}
+            return base_data
 
         # Merge results with existing data (keep stopped tracking numbers)
-        new_data = dict(self.data or {})
+        new_data = dict(base_data)
         for number, result in zip(active_numbers, results):
             if isinstance(result, Exception):
                 _LOGGER.error("Exception for %s: %s", number, result)

@@ -1,34 +1,143 @@
 {
+  "title": "Greek Courier Tracker",
   "config": {
     "step": {
       "user": {
         "title": "Greek Courier Tracker",
-        "description": "Add your first tracking number. You can add more later in the integration settings.",
+        "description": "Optionally add your first tracking number. You can add more later from the dashboard card, the Shipments to-do list or Configure.",
         "data": {
-          "tracking_numbers": "Tracking number",
+          "tracking_numbers": "Tracking number (optional)",
           "tracking_name": "Name (optional)",
-          "courier": "Courier provider",
+          "courier": "Courier",
           "scan_interval": "Scan interval (hours)"
         }
       }
     },
+    "abort": {
+      "single_instance_allowed": "Greek Courier Tracker is already set up. Add tracking numbers from the dashboard card, the Shipments to-do list or Configure."
+    },
     "error": {
-      "no_tracking_numbers": "Please provide at least one tracking number."
+      "no_tracking_numbers": "Enter at least one tracking number."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "Greek Courier Tracker Options",
-        "description": "Update tracking numbers and scan interval.",
+        "title": "Greek Courier Tracker",
+        "description": "Tracked shipments:\n{tracking_list}",
+        "menu_options": {
+          "add_tracking": "Add tracking number",
+          "edit_select": "Edit tracking number",
+          "delete_select": "Remove tracking numbers",
+          "settings": "Settings"
+        }
+      },
+      "add_tracking": {
+        "title": "Add tracking number",
+        "description": "The courier is detected automatically unless you pick one.",
         "data": {
-          "tracking_numbers": "Tracking numbers",
+          "tracking_number": "Tracking number",
+          "name": "Name (optional)",
+          "courier": "Courier",
+          "stop_tracking_delivered": "Stop tracking when delivered"
+        }
+      },
+      "edit_select": {
+        "title": "Edit tracking number",
+        "data": {
+          "tracking_number": "Tracking number"
+        }
+      },
+      "edit_tracking": {
+        "title": "Edit tracking number",
+        "description": "Tracking number: {tracking_number}",
+        "data": {
+          "name": "Name",
+          "courier": "Courier",
+          "stop_tracking_delivered": "Stop tracking when delivered"
+        }
+      },
+      "delete_select": {
+        "title": "Remove tracking numbers",
+        "description": "The selected shipments will no longer be tracked.",
+        "data": {
+          "tracking_numbers": "Tracking numbers"
+        }
+      },
+      "settings": {
+        "title": "Settings",
+        "data": {
           "scan_interval": "Scan interval (hours)"
         }
       }
     },
     "error": {
-      "no_tracking_numbers": "Please provide at least one tracking number."
+      "tracking_number_required": "Enter a tracking number.",
+      "tracking_number_exists": "This tracking number is already tracked."
+    }
+  },
+  "entity": {
+    "todo": {
+      "shipments": {
+        "name": "Shipments"
+      }
+    }
+  },
+  "selector": {
+    "courier": {
+      "options": {
+        "auto": "Auto-detect",
+        "acs": "ACS Courier",
+        "box_now": "Box Now",
+        "courier_center": "Courier Center",
+        "elta": "ELTA Courier",
+        "geniki": "Geniki Taxydromiki",
+        "skroutz": "Skroutz Last Mile",
+        "speedex": "SpeedEx",
+        "svuum": "Svuum"
+      }
+    }
+  },
+  "services": {
+    "add_tracking": {
+      "name": "Add tracking number",
+      "description": "Starts tracking a shipment.",
+      "fields": {
+        "tracking_number": {
+          "name": "Tracking number",
+          "description": "The tracking number of the shipment."
+        },
+        "name": {
+          "name": "Name",
+          "description": "A name for the shipment. Defaults to the tracking number."
+        },
+        "courier": {
+          "name": "Courier",
+          "description": "The courier. Leave on auto-detect if you're not sure."
+        },
+        "stop_tracking_delivered": {
+          "name": "Stop tracking when delivered",
+          "description": "Stop checking the shipment after it's delivered."
+        },
+        "config_entry_id": {
+          "name": "Integration entry",
+          "description": "Only needed if you have more than one Greek Courier Tracker entry."
+        }
+      }
+    },
+    "remove_tracking": {
+      "name": "Remove tracking number",
+      "description": "Stops tracking a shipment and removes its sensor.",
+      "fields": {
+        "tracking_number": {
+          "name": "Tracking number",
+          "description": "The tracking number to stop tracking."
+        },
+        "config_entry_id": {
+          "name": "Integration entry",
+          "description": "Only needed if you have more than one Greek Courier Tracker entry."
+        }
+      }
     }
   }
 }

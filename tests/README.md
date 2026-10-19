@@ -38,6 +38,7 @@ cd tests
 - `test_tracking_detection.py` - Tracking number format detection
 - `test_couriers_simple.py` - Courier properties and status translation
 - `test_mocked_apis.py` - Mocked API response tests for all couriers
+- `test_management.py` - Adding/removing tracking numbers: actions, Shipments to-do list, Configure menu, dashboard card sync
 
 ### Integration Tests
 - `test_integration.py` - Home Assistant integration tests (config flow, coordinator, sensors)
@@ -50,7 +51,7 @@ cd tests
 
 ## Test Coverage
 
-✅ **98 tests** covering:
+✅ **137 tests** covering:
 - All 8 couriers (ELTA, ACS, SpeedEx, BoxNow, Geniki, CourierCenter, Skroutz Last Mile, Svuum)
 - Tracking number detection and validation
 - Status translation and categorization
@@ -76,4 +77,4 @@ The test suite runs automatically on:
 - Pull requests to `main` or `dev` branches
 - Manual workflow dispatch
 
-CI runs tests on Python 3.10, 3.11, and 3.12 using both local pytest and Docker containers.
+CI runs tests on Python 3.12 and 3.13 using both local pytest and Docker containers.

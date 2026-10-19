@@ -18,6 +18,14 @@ CONF_STOP_TRACKING_DELIVERED: Final = "stop_tracking_delivered"  # Stop tracking
 DEFAULT_SCAN_INTERVAL: Final = 1  # hours
 DEFAULT_NAME: Final = "Greek Courier Tracker"
 
+# Dispatcher signals for tracking numbers added/changed without a reload
+SIGNAL_TRACKING_ADDED: Final = "greek_courier_tracker_tracking_added_{entry_id}"
+SIGNAL_TRACKING_CHANGED: Final = "greek_courier_tracker_tracking_changed_{entry_id}"
+
+# Bundled dashboard card
+CARD_URL_BASE: Final = "/greek_courier_tracker"
+CARD_FILENAME: Final = "greek-courier-tracker-card.js"
+
 
 class CourierType(str, Enum):
     """Supported courier types."""

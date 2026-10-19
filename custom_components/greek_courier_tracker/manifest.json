@@ -3,7 +3,7 @@
   "name": "Greek Courier Tracker",
   "codeowners": ["@thanasis00"],
   "config_flow": true,
-  "dependencies": [],
+  "dependencies": ["frontend", "http"],
   "documentation": "https://github.com/thanasis00/greek-courier-tracker-hacs",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/thanasis00/greek-courier-tracker-hacs/issues",

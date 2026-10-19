@@ -1,0 +1,143 @@
+{
+  "title": "Greek Courier Tracker",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Greek Courier Tracker",
+        "description": "Πρόσθεσε προαιρετικά τον πρώτο αριθμό αποστολής. Μπορείς να προσθέσεις κι άλλους αργότερα από την κάρτα του dashboard, τη λίστα Αποστολές ή το Configure.",
+        "data": {
+          "tracking_numbers": "Αριθμός αποστολής (προαιρετικό)",
+          "tracking_name": "Όνομα (προαιρετικό)",
+          "courier": "Εταιρεία",
+          "scan_interval": "Διάστημα ελέγχου (ώρες)"
+        }
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Το Greek Courier Tracker έχει ήδη ρυθμιστεί. Πρόσθεσε αριθμούς από την κάρτα του dashboard, τη λίστα Αποστολές ή το Configure."
+    },
+    "error": {
+      "no_tracking_numbers": "Γράψε τουλάχιστον έναν αριθμό αποστολής."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Greek Courier Tracker",
+        "description": "Αποστολές που παρακολουθούνται:\n{tracking_list}",
+        "menu_options": {
+          "add_tracking": "Προσθήκη αριθμού αποστολής",
+          "edit_select": "Επεξεργασία αριθμού αποστολής",
+          "delete_select": "Αφαίρεση αριθμών αποστολής",
+          "settings": "Ρυθμίσεις"
+        }
+      },
+      "add_tracking": {
+        "title": "Προσθήκη αριθμού αποστολής",
+        "description": "Η εταιρεία εντοπίζεται αυτόματα, εκτός αν διαλέξεις μία.",
+        "data": {
+          "tracking_number": "Αριθμός αποστολής",
+          "name": "Όνομα (προαιρετικό)",
+          "courier": "Εταιρεία",
+          "stop_tracking_delivered": "Διακοπή παρακολούθησης μετά την παράδοση"
+        }
+      },
+      "edit_select": {
+        "title": "Επεξεργασία αριθμού αποστολής",
+        "data": {
+          "tracking_number": "Αριθμός αποστολής"
+        }
+      },
+      "edit_tracking": {
+        "title": "Επεξεργασία αριθμού αποστολής",
+        "description": "Αριθμός αποστολής: {tracking_number}",
+        "data": {
+          "name": "Όνομα",
+          "courier": "Εταιρεία",
+          "stop_tracking_delivered": "Διακοπή παρακολούθησης μετά την παράδοση"
+        }
+      },
+      "delete_select": {
+        "title": "Αφαίρεση αριθμών αποστολής",
+        "description": "Οι αποστολές που θα επιλέξεις δεν θα παρακολουθούνται πια.",
+        "data": {
+          "tracking_numbers": "Αριθμοί αποστολής"
+        }
+      },
+      "settings": {
+        "title": "Ρυθμίσεις",
+        "data": {
+          "scan_interval": "Διάστημα ελέγχου (ώρες)"
+        }
+      }
+    },
+    "error": {
+      "tracking_number_required": "Γράψε έναν αριθμό αποστολής.",
+      "tracking_number_exists": "Αυτός ο αριθμός παρακολουθείται ήδη."
+    }
+  },
+  "entity": {
+    "todo": {
+      "shipments": {
+        "name": "Αποστολές"
+      }
+    }
+  },
+  "selector": {
+    "courier": {
+      "options": {
+        "auto": "Αυτόματος εντοπισμός",
+        "acs": "ACS Courier",
+        "box_now": "Box Now",
+        "courier_center": "Courier Center",
+        "elta": "ΕΛΤΑ Courier",
+        "geniki": "Γενική Ταχυδρομική",
+        "skroutz": "Skroutz Last Mile",
+        "speedex": "SpeedEx",
+        "svuum": "Svuum"
+      }
+    }
+  },
+  "services": {
+    "add_tracking": {
+      "name": "Προσθήκη αριθμού αποστολής",
+      "description": "Ξεκινά την παρακολούθηση μιας αποστολής.",
+      "fields": {
+        "tracking_number": {
+          "name": "Αριθμός αποστολής",
+          "description": "Ο αριθμός της αποστολής."
+        },
+        "name": {
+          "name": "Όνομα",
+          "description": "Ένα όνομα για την αποστολή. Αν λείπει, χρησιμοποιείται ο αριθμός."
+        },
+        "courier": {
+          "name": "Εταιρεία",
+          "description": "Η εταιρεία αποστολής. Άφησέ το στον αυτόματο εντοπισμό αν δεν είσαι σίγουρος."
+        },
+        "stop_tracking_delivered": {
+          "name": "Διακοπή μετά την παράδοση",
+          "description": "Σταματά τους ελέγχους όταν η αποστολή παραδοθεί."
+        },
+        "config_entry_id": {
+          "name": "Καταχώριση integration",
+          "description": "Χρειάζεται μόνο αν έχεις πάνω από μία καταχώριση Greek Courier Tracker."
+        }
+      }
+    },
+    "remove_tracking": {
+      "name": "Αφαίρεση αριθμού αποστολής",
+      "description": "Σταματά την παρακολούθηση μιας αποστολής και αφαιρεί τον αισθητήρα της.",
+      "fields": {
+        "tracking_number": {
+          "name": "Αριθμός αποστολής",
+          "description": "Ο αριθμός που θα σταματήσει να παρακολουθείται."
+        },
+        "config_entry_id": {
+          "name": "Καταχώριση integration",
+          "description": "Χρειάζεται μόνο αν έχεις πάνω από μία καταχώριση Greek Courier Tracker."
+        }
+      }
+    }
+  }
+}
