@@ -50,8 +50,8 @@ cd tests
 
 ## Test Coverage
 
-✅ **84 tests** covering:
-- All 6 couriers (ELTA, ACS, SpeedEx, BoxNow, Geniki, CourierCenter)
+✅ **98 tests** covering:
+- All 8 couriers (ELTA, ACS, SpeedEx, BoxNow, Geniki, CourierCenter, Skroutz Last Mile, Svuum)
 - Tracking number detection and validation
 - Status translation and categorization
 - Home Assistant config flow, coordinator, and sensors

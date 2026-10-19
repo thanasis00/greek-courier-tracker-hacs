@@ -20,6 +20,8 @@ from custom_components.greek_courier_tracker.couriers import (
     BoxNowCourier,
     GenikiCourier,
     CourierCenterCourier,
+    SkroutzCourier,
+    SvuumCourier,
 )
 
 
@@ -47,6 +49,12 @@ TEST_TRACKING_NUMBERS = {
     ],
     "courier_center": [
         "CC12345678",  # CC + 8 digits
+    ],
+    "skroutz": [
+        "AB12CD34EF56G",  # 13 alphanumeric characters
+    ],
+    "svuum": [
+        "1234567",  # 7 digits
     ],
 }
 
@@ -136,6 +144,8 @@ class TestGenikiLiveAPI:
         assert result is not None
         assert result.courier == "geniki"
         assert result.tracking_number == "GT123456789"
+        # A bogus number must not come back as an empty "Unknown" result
+        assert result.status in ["Not Found", "Error"]
 
 
 @pytest.mark.live
@@ -155,6 +165,36 @@ class TestCourierCenterLiveAPI:
 
 @pytest.mark.live
 @pytest.mark.asyncio
+class TestSkroutzLiveAPI:
+    """Live API tests for Skroutz Last Mile."""
+
+    async def test_skroutz_api_reachable(self):
+        """Test that Skroutz Last Mile API is reachable."""
+        courier = SkroutzCourier()
+        result = await courier.track("AB12CD34EF56G")
+
+        assert result is not None
+        assert result.courier == "skroutz"
+        assert result.tracking_number == "AB12CD34EF56G"
+
+
+@pytest.mark.live
+@pytest.mark.asyncio
+class TestSvuumLiveAPI:
+    """Live API tests for Svuum."""
+
+    async def test_svuum_api_reachable(self):
+        """Test that Svuum API is reachable."""
+        courier = SvuumCourier()
+        result = await courier.track("1234567")
+
+        assert result is not None
+        assert result.courier == "svuum"
+        assert result.tracking_number == "1234567"
+
+
+@pytest.mark.live
+@pytest.mark.asyncio
 class TestAllCouriersReachable:
     """Test that all courier APIs are reachable."""
 
@@ -167,6 +207,8 @@ class TestAllCouriersReachable:
             "speedex": SpeedExCourier(),
             "geniki": GenikiCourier(),
             "courier_center": CourierCenterCourier(),
+            "skroutz": SkroutzCourier(),
+            "svuum": SvuumCourier(),
         }
 
         test_numbers = {
@@ -176,6 +218,8 @@ class TestAllCouriersReachable:
             "speedex": "SP12345678",
             "geniki": "GT123456789",
             "courier_center": "CC12345678",
+            "skroutz": "AB12CD34EF56G",
+            "svuum": "1234567",
         }
 
         results = {}

@@ -374,15 +374,13 @@ class TestErrorHandling:
 
         result = await track_with_auto_detect("INVALID")
 
-        # All couriers should fail
-        assert result.success is False
-        assert result.status_category == "error"
+        # No courier should claim the number: with network access every courier
+        # answers "Not Found", without it every request fails with "Error"
+        assert result.status in ["Not Found", "Error"]
+        assert result.events == []
         # The courier will be one of the tried couriers (last one in registry)
         # or "unknown" if all return failure responses
-        assert result.courier in ["unknown", "elta", "acs", "speedex", "box_now", "geniki", "courier_center"]
-        # The error message may vary, just check it exists
-        assert result.error_message is not None
-        assert len(result.error_message) > 0
+        assert result.courier in ["unknown", "elta", "acs", "speedex", "box_now", "geniki", "courier_center", "skroutz", "svuum"]
 
     def test_error_result_creation(self):
         """Test creating an error TrackingResult."""

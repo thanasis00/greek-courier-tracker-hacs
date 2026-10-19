@@ -10,6 +10,8 @@ from .speedex import SpeedExCourier
 from .boxnow import BoxNowCourier
 from .geniki import GenikiCourier
 from .courier_center import CourierCenterCourier
+from .skroutz import SkroutzCourier
+from .svuum import SvuumCourier
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -20,6 +22,8 @@ __all__ = [
     "BoxNowCourier",
     "GenikiCourier",
     "CourierCenterCourier",
+    "SkroutzCourier",
+    "SvuumCourier",
     "get_courier",
     "track_with_auto_detect",
     "_track_with_retry",
@@ -33,6 +37,8 @@ COURIER_REGISTRY: dict[str, type[BaseCourier]] = {
     "box_now": BoxNowCourier,
     "geniki": GenikiCourier,
     "courier_center": CourierCenterCourier,
+    "skroutz": SkroutzCourier,
+    "svuum": SvuumCourier,
 }
 
 # Maximum retries per courier
@@ -91,7 +97,12 @@ async def track_with_auto_detect(tracking_number: str) -> TrackingResult:
         last_result = result
 
         # If we got a successful result with actual tracking data, return it
-        if result.success and result.status not in ["Not Found", "Error"]:
+        # (an empty "Unknown" result means the courier didn't recognize the number)
+        if (
+            result.success
+            and result.status not in ["Not Found", "Error"]
+            and (result.events or result.status not in ["Unknown", ""])
+        ):
             _LOGGER.info(
                 "Successfully tracked %s using %s: %s",
                 tracking_number,

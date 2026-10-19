@@ -6,7 +6,7 @@
 
 Track shipments from all major Greek courier services in Home Assistant.
 
-**Supported Couriers:** ELTA, ACS, SpeedEx, Box Now, Courier Center, Geniki Taxydromiki
+**Supported Couriers:** ELTA, ACS, SpeedEx, Box Now, Courier Center, Geniki Taxydromiki, Skroutz Last Mile, Svuum
 
 ## Installation
 

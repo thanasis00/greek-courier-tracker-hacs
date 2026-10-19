@@ -9,6 +9,8 @@ from custom_components.greek_courier_tracker.couriers import (
     BoxNowCourier,
     GenikiCourier,
     CourierCenterCourier,
+    SkroutzCourier,
+    SvuumCourier,
     get_courier,
 )
 from custom_components.greek_courier_tracker.couriers.base import TrackingResult, TrackingEvent
@@ -52,6 +54,18 @@ class TestCourierBasics:
         courier = CourierCenterCourier()
         assert courier.COURIER_CODE == "courier_center"
         assert courier.COURIER_NAME == "Courier Center"
+
+    def test_skroutz_courier_properties(self):
+        """Test Skroutz Last Mile properties."""
+        courier = SkroutzCourier()
+        assert courier.COURIER_CODE == "skroutz"
+        assert courier.COURIER_NAME == "Skroutz Last Mile"
+
+    def test_svuum_courier_properties(self):
+        """Test Svuum properties."""
+        courier = SvuumCourier()
+        assert courier.COURIER_CODE == "svuum"
+        assert courier.COURIER_NAME == "Svuum"
 
 
 class TestStatusTranslation:
@@ -119,6 +133,9 @@ class TestCourierFactory:
         speedex = get_courier("speedex")
         assert speedex is not None
         assert isinstance(speedex, SpeedExCourier)
+
+        assert isinstance(get_courier("skroutz"), SkroutzCourier)
+        assert isinstance(get_courier("svuum"), SvuumCourier)
 
     def test_get_invalid_courier(self):
         """Test getting invalid courier returns None."""

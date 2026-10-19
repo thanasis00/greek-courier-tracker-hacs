@@ -44,7 +44,9 @@ COURIER_LIST = [
     (CourierType.COURIER_CENTER, COURIER_NAMES[CourierType.COURIER_CENTER]),
     (CourierType.ELTA, COURIER_NAMES[CourierType.ELTA]),
     (CourierType.GENIKI, COURIER_NAMES[CourierType.GENIKI]),
+    (CourierType.SKROUTZ, COURIER_NAMES[CourierType.SKROUTZ]),
     (CourierType.SPEEDEX, COURIER_NAMES[CourierType.SPEEDEX]),
+    (CourierType.SVUUM, COURIER_NAMES[CourierType.SVUUM]),
 ]
 
 

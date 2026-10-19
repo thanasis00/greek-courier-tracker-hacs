@@ -27,6 +27,8 @@ class CourierType(str, Enum):
     SPEEDEX = "speedex"
     COURIER_CENTER = "courier_center"
     BOX_NOW = "box_now"
+    SKROUTZ = "skroutz"
+    SVUUM = "svuum"
     AUTO = "auto"
 
 
@@ -38,6 +40,8 @@ COURIER_NAMES: Final[dict[str, str]] = {
     CourierType.SPEEDEX: "SpeedEx",
     CourierType.COURIER_CENTER: "Courier Center",
     CourierType.BOX_NOW: "Box Now",
+    CourierType.SKROUTZ: "Skroutz Last Mile",
+    CourierType.SVUUM: "Svuum",
     CourierType.AUTO: "Auto-detect (try all)",
 }
 
@@ -71,6 +75,14 @@ TRACKING_PATTERNS: Final[dict[str, list[str]]] = {
     # Box Now: 10 digits (similar to ACS but different API)
     CourierType.BOX_NOW: [
         r"^BN\d{8,10}$",     # BN prefix
+    ],
+    # Skroutz Last Mile: 13 alphanumeric characters
+    CourierType.SKROUTZ: [
+        r"^[A-Z0-9]{13}$",   # E8GYRRONRYKL9
+    ],
+    # Svuum: 7 digits
+    CourierType.SVUUM: [
+        r"^\d{7}$",          # 1234567
     ],
 }
 

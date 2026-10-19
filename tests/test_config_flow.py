@@ -176,7 +176,7 @@ class TestCourierDropdown:
 
         # Verify all expected couriers are present
         courier_codes = [code for code, _ in COURIER_LIST]
-        expected_codes = ["auto", "acs", "box_now", "courier_center", "elta", "geniki", "speedex"]
+        expected_codes = ["auto", "acs", "box_now", "courier_center", "elta", "geniki", "skroutz", "speedex", "svuum"]
         for code in expected_codes:
             assert code in courier_codes, f"Missing courier code: {code}"
 
@@ -404,6 +404,8 @@ class TestCourierSelectionWithAllCodes:
         ("speedex", "SpeedEx"),
         ("courier_center", "Courier Center"),
         ("box_now", "Box Now"),
+        ("skroutz", "Skroutz Last Mile"),
+        ("svuum", "Svuum"),
     ])
     async def test_each_courier_code_can_be_saved(self, courier_code, expected_name):
         """Test that each courier code can be saved properly."""

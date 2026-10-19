@@ -16,6 +16,8 @@ from custom_components.greek_courier_tracker.couriers import (
     BoxNowCourier,
     GenikiCourier,
     CourierCenterCourier,
+    SkroutzCourier,
+    SvuumCourier,
 )
 
 
@@ -262,44 +264,171 @@ class TestSpeedExMockedAPI:
             assert len(result.events) > 0
 
 
+def _geniki_response(tracking_number, *checkpoints):
+    """Build a taxydromiki.com track-site.php response (checkpoints oldest first)."""
+    if not checkpoints:
+        return {
+            "success": True,
+            tracking_number: {"TrackAndTraceResult": {"Result": 9, "Checkpoints": {}}},
+        }
+    return {
+        "success": True,
+        tracking_number: {
+            "TrackAndTraceResult": {
+                "Result": 0,
+                "Checkpoints": {
+                    "Checkpoint": [
+                        {"StatusCode": code, "StatusDate": date, "Status": status, "Shop": shop}
+                        for code, date, status, shop in checkpoints
+                    ]
+                },
+            }
+        },
+    }
+
+
 @pytest.mark.asyncio
 class TestGenikiMockedAPI:
     """Mocked API tests for Geniki Taxydromiki."""
 
-    async def test_geniki_successful_tracking(self):
-        """Test Geniki with successful tracking response."""
+    async def test_geniki_delivered(self):
+        """Test Geniki with a delivered shipment (Greek and English requests)."""
         courier = GenikiCourier()
 
-        mock_html = """
-        <html>
-            <body>
-                <div class="tracking-checkpoint">
-                    <div class="checkpoint-status">ΠΑΡΑΔΟΣΗ</div>
-                    <div class="checkpoint-location">Athens</div>
-                    <div class="checkpoint-date">Δευτέρα, 15/02/2026</div>
-                    <div class="checkpoint-time">14:30</div>
-                </div>
-                <div class="tracking-checkpoint">
-                    <div class="checkpoint-status">ΜΕΤΑΦΟΡΑ</div>
-                    <div class="checkpoint-location">Thessaloniki</div>
-                    <div class="checkpoint-date">Τρίτη, 14/02/2026</div>
-                    <div class="checkpoint-time">10:15</div>
-                </div>
-            </body>
-        </html>
-        """
+        response_el = _geniki_response(
+            "1234567890",
+            ("C_NW", "2026-02-13T09:00:00", "ΔΗΜΙΟΥΡΓΙΑ ΑΠΟΣΤΟΛΗΣ", "ΑΘΗΝΑ"),
+            ("C_W3", "2026-02-14T10:15:00", "ΠΑΡΑΛΑΒΗ ΑΠΟΣΤΟΛΗΣ", "ΑΘΗΝΑ"),
+            ("C_W2", "2026-02-15T14:30:00.1234567", "ΠΑΡΑΔΟΣΗ", "ΘΕΣΣΑΛΟΝΙΚΗ"),
+        )
+        response_en = _geniki_response(
+            "1234567890",
+            ("C_NW", "2026-02-13T09:00:00", "Shipment created", "ATHENS"),
+            ("C_W3", "2026-02-14T10:15:00", "Shipment picked up", "ATHENS"),
+            ("C_W2", "2026-02-15T14:30:00.1234567", "Delivered", "THESSALONIKI"),
+        )
 
-        with patch("aiohttp.ClientSession.get") as mock_get:
-            mock_get.return_value.__aenter__.return_value.status = 200
-            mock_get.return_value.__aenter__.return_value.text = AsyncMock(
-                return_value=mock_html
+        with patch("aiohttp.ClientSession.post") as mock_post:
+            mock_post.return_value.__aenter__.return_value.status = 200
+            mock_post.return_value.__aenter__.return_value.json = AsyncMock(
+                side_effect=[response_el, response_en]
             )
 
-            result = await courier.track("GT123456789")
+            result = await courier.track("1234567890")
 
+            assert mock_post.call_count == 2
             assert result.success is True
             assert result.courier == "geniki"
-            assert len(result.events) > 0
+            assert result.status == "Delivered"
+            assert result.status_category == "delivered"
+            assert len(result.events) == 3
+            # Newest event first
+            assert result.latest_event.status == "ΠΑΡΑΔΟΣΗ"
+            assert result.latest_event.location == "ΘΕΣΣΑΛΟΝΙΚΗ"
+            assert result.latest_event.date == "2026-02-15"
+            assert result.latest_event.time == "14:30"
+            assert result.events[-1].status_translated == "Shipment created"
+
+    async def test_geniki_cancelled_pair_hidden(self):
+        """Test that an event cancelled by a later one is hidden, as on the website."""
+        courier = GenikiCourier()
+
+        response = _geniki_response(
+            "1234567890",
+            ("C_NW", "2026-02-13T09:00:00", "ΔΗΜΙΟΥΡΓΙΑ ΑΠΟΣΤΟΛΗΣ", "ΑΘΗΝΑ"),
+            ("C_K8", "2026-02-14T10:00:00", "ΠΑΡΑΛΑΒΗ ΑΠΟ ΚΑΤΑΣΤΗΜΑ", "ΑΘΗΝΑ"),
+            ("C_K9", "2026-02-14T10:05:00", "ΑΚΥΡΩΣΗ ΠΑΡΑΛΑΒΗΣ", "ΑΘΗΝΑ"),
+            ("C_A1", "2026-02-14T12:00:00", "ΑΦΙΞΗ ΣΤΟ ΚΕΝΤΡΟ ΔΙΑΛΟΓΗΣ", "ΑΣΠΡΟΠΥΡΓΟΣ"),
+        )
+
+        with patch("aiohttp.ClientSession.post") as mock_post:
+            mock_post.return_value.__aenter__.return_value.status = 200
+            mock_post.return_value.__aenter__.return_value.json = AsyncMock(
+                side_effect=[response, response]
+            )
+
+            result = await courier.track("1234567890")
+
+            assert [event.status for event in result.events] == [
+                "ΑΦΙΞΗ ΣΤΟ ΚΕΝΤΡΟ ΔΙΑΛΟΓΗΣ",
+                "ΔΗΜΙΟΥΡΓΙΑ ΑΠΟΣΤΟΛΗΣ",
+            ]
+            assert result.status_category == "in_transit"
+
+    async def test_geniki_created(self):
+        """Test Geniki with a voucher that was only created."""
+        courier = GenikiCourier()
+
+        response = _geniki_response(
+            "1234567890",
+            ("C_NW", "2026-02-13T09:00:00", "ΔΗΜΙΟΥΡΓΙΑ ΑΠΟΣΤΟΛΗΣ", "ΑΘΗΝΑ"),
+        )
+        # A single checkpoint may come back as an object instead of a list
+        checkpoints = response["1234567890"]["TrackAndTraceResult"]["Checkpoints"]
+        checkpoints["Checkpoint"] = checkpoints["Checkpoint"][0]
+
+        with patch("aiohttp.ClientSession.post") as mock_post:
+            mock_post.return_value.__aenter__.return_value.status = 200
+            mock_post.return_value.__aenter__.return_value.json = AsyncMock(
+                side_effect=[response, response]
+            )
+
+            result = await courier.track("1234567890")
+
+            assert len(result.events) == 1
+            assert result.status_category == "created"
+
+    async def test_geniki_english_unavailable(self):
+        """Test that Greek statuses are translated locally if the English request fails."""
+        courier = GenikiCourier()
+
+        response_el = _geniki_response(
+            "1234567890",
+            ("C_W2", "2026-02-15T14:30:00", "ΠΑΡΑΔΟΣΗ", "ΘΕΣΣΑΛΟΝΙΚΗ"),
+        )
+
+        with patch("aiohttp.ClientSession.post") as mock_post:
+            mock_post.return_value.__aenter__.return_value.status = 200
+            mock_post.return_value.__aenter__.return_value.json = AsyncMock(
+                side_effect=[response_el, aiohttp.ClientError("Network error")]
+            )
+
+            result = await courier.track("1234567890")
+
+            assert result.success is True
+            assert result.status == "Delivered"
+            assert result.latest_event.status_translated == "Delivered"
+
+    async def test_geniki_not_found(self):
+        """Test Geniki with an unknown tracking number (empty checkpoints)."""
+        courier = GenikiCourier()
+
+        with patch("aiohttp.ClientSession.post") as mock_post:
+            mock_post.return_value.__aenter__.return_value.status = 200
+            mock_post.return_value.__aenter__.return_value.json = AsyncMock(
+                return_value=_geniki_response("1234567890")
+            )
+
+            result = await courier.track("1234567890")
+
+            # No English request for unknown numbers
+            assert mock_post.call_count == 1
+            assert result.success is True
+            assert result.status == "Not Found"
+            assert len(result.events) == 0
+
+    async def test_geniki_server_error(self):
+        """Test Geniki with a server error."""
+        courier = GenikiCourier()
+
+        with patch("aiohttp.ClientSession.post") as mock_post:
+            mock_post.return_value.__aenter__.return_value.status = 500
+
+            result = await courier.track("1234567890")
+
+            assert result.success is False
+            assert result.status_category == "error"
+            assert "HTTP error" in result.error_message
 
 
 @pytest.mark.asyncio
@@ -340,6 +469,330 @@ class TestCourierCenterMockedAPI:
             assert result.success is True
             assert result.courier == "courier_center"
             assert len(result.events) > 0
+
+
+@pytest.mark.asyncio
+class TestSkroutzMockedAPI:
+    """Mocked API tests for Skroutz Last Mile."""
+
+    async def test_skroutz_in_transit(self):
+        """Test Skroutz Last Mile with a picked up shipment."""
+        courier = SkroutzCourier()
+
+        mock_response = {
+            "status": "picked_up",
+            "pickedUpAt": "2026-02-14T10:36:52.928Z",
+            "deliveredAt": None,
+            "trackingDetails": [
+                {
+                    "description": "Shipment was picked up",
+                    "notes": "",
+                    "createdAt": "2026-02-14T10:36:52.932Z",
+                    "description_gr": "Παραλάβαμε το δέμα από το κατάστημα",
+                    "description_en": "We have picked up the shipment from the sender",
+                    "trackingState": "PICKED_UP",
+                },
+                {
+                    "description": "Scanned",
+                    "notes": "SLM HUB Αιγάλεω",
+                    "createdAt": "2026-02-14T16:52:19.642Z",
+                    "description_gr": "Η αποστολή βρίσκεται στο SLM HUB Αιγάλεω",
+                    "description_en": "The shipment is at SLM HUB Αιγάλεω",
+                    "trackingState": "SCANNED",
+                },
+            ],
+            "statusTextGr": "Η αποστολή βρίσκεται στο κέντρο διαλογής της Skroutz Last Mile",
+            "statusTextEn": "The shipment is at the Skroutz Last Mile sorting centre",
+        }
+
+        with patch("aiohttp.ClientSession.get") as mock_get:
+            mock_get.return_value.__aenter__.return_value.status = 200
+            mock_get.return_value.__aenter__.return_value.json = AsyncMock(
+                return_value=mock_response
+            )
+
+            result = await courier.track("ab12cd34ef56g")
+
+            assert result.success is True
+            assert result.courier == "skroutz"
+            assert result.tracking_number == "AB12CD34EF56G"
+            assert result.status == "The shipment is at the Skroutz Last Mile sorting centre"
+            assert result.status_category == "in_transit"
+            assert len(result.events) == 2
+            # Newest event first, converted to Athens local time (UTC+2 in February)
+            assert result.latest_event.location == "SLM HUB Αιγάλεω"
+            assert result.latest_event.status == "Η αποστολή βρίσκεται στο SLM HUB Αιγάλεω"
+            assert result.latest_event.status_translated == "The shipment is at SLM HUB Αιγάλεω"
+            assert result.latest_event.date == "2026-02-14"
+            assert result.latest_event.time == "18:52"
+
+    async def test_skroutz_delivered(self):
+        """Test Skroutz Last Mile with a delivered shipment."""
+        courier = SkroutzCourier()
+
+        mock_response = {
+            "status": "delivered",
+            "pickedUpAt": "2026-02-14T10:36:52.928Z",
+            "deliveredAt": "2026-02-15T12:00:00.000Z",
+            "trackingDetails": [
+                {
+                    "createdAt": "2026-02-15T12:00:00.000Z",
+                    "description_gr": "Η αποστολή παραδόθηκε",
+                    "description_en": "The shipment was delivered",
+                },
+            ],
+            "statusTextEn": "Delivered",
+        }
+
+        with patch("aiohttp.ClientSession.get") as mock_get:
+            mock_get.return_value.__aenter__.return_value.status = 200
+            mock_get.return_value.__aenter__.return_value.json = AsyncMock(
+                return_value=mock_response
+            )
+
+            result = await courier.track("AB12CD34EF56G")
+
+            assert result.success is True
+            assert result.status_category == "delivered"
+
+    async def test_skroutz_created(self):
+        """Test Skroutz Last Mile with a shipment not picked up yet."""
+        courier = SkroutzCourier()
+
+        mock_response = {
+            "status": "created",
+            "pickedUpAt": None,
+            "deliveredAt": None,
+            "trackingDetails": [],
+            "statusTextEn": "The shipment has been created",
+        }
+
+        with patch("aiohttp.ClientSession.get") as mock_get:
+            mock_get.return_value.__aenter__.return_value.status = 200
+            mock_get.return_value.__aenter__.return_value.json = AsyncMock(
+                return_value=mock_response
+            )
+
+            result = await courier.track("AB12CD34EF56G")
+
+            assert result.success is True
+            assert result.status == "The shipment has been created"
+            assert result.status_category == "created"
+
+    async def test_skroutz_not_found(self):
+        """Test Skroutz Last Mile with an unknown tracking number (HTTP 400)."""
+        courier = SkroutzCourier()
+
+        with patch("aiohttp.ClientSession.get") as mock_get:
+            mock_get.return_value.__aenter__.return_value.status = 400
+
+            result = await courier.track("AB12CD34EF56G")
+
+            assert result.success is True
+            assert result.status == "Not Found"
+            assert len(result.events) == 0
+
+    async def test_skroutz_server_error(self):
+        """Test Skroutz Last Mile with a server error."""
+        courier = SkroutzCourier()
+
+        with patch("aiohttp.ClientSession.get") as mock_get:
+            mock_get.return_value.__aenter__.return_value.status = 500
+
+            result = await courier.track("AB12CD34EF56G")
+
+            assert result.success is False
+            assert result.status_category == "error"
+            assert "HTTP error" in result.error_message
+
+
+@pytest.mark.asyncio
+class TestSvuumMockedAPI:
+    """Mocked API tests for Svuum."""
+
+    @staticmethod
+    def _response(*timeline):
+        return [
+            {
+                "referenceNumber": "1234567",
+                "processTimeLineLogsList": list(timeline),
+                "processMasterId": 5630,
+                "proceMasterCode": "Website Tracking",
+            }
+        ]
+
+    async def test_svuum_in_transit(self):
+        """Test Svuum with a shipment at the central warehouse."""
+        courier = SvuumCourier()
+
+        mock_response = self._response(
+            {
+                "status": "Επιτυχής Παραλαβή Στην Κεντρική Αποθήκη Tης Svuum",
+                "statusTime": "Feb-14-2026 05:40 PM",
+                "statusCode": "S210",
+            },
+            {
+                "status": "Η Παραγγελία Βρίσκεται Aκόμα Στο Eshop",
+                "statusTime": "Feb-14-2026 03:57 PM",
+                "statusCode": "S010",
+            },
+        )
+
+        with patch("aiohttp.ClientSession.get") as mock_get:
+            mock_get.return_value.__aenter__.return_value.status = 200
+            mock_get.return_value.__aenter__.return_value.json = AsyncMock(
+                return_value=mock_response
+            )
+
+            result = await courier.track("1234567")
+
+            assert result.success is True
+            assert result.courier == "svuum"
+            assert result.status == "Received at Svuum Central Warehouse"
+            assert result.status_category == "in_transit"
+            assert len(result.events) == 2
+            assert result.latest_event.date == "2026-02-14"
+            assert result.latest_event.time == "17:40"
+            assert result.events[1].status_translated == "Order Still at the E-shop"
+
+    async def test_svuum_created(self):
+        """Test Svuum with an order still at the e-shop."""
+        courier = SvuumCourier()
+
+        mock_response = self._response(
+            {
+                "status": "Η Παραγγελία Βρίσκεται Aκόμα Στο Eshop",
+                "statusTime": "Feb-14-2026 12:05 AM",
+                "statusCode": "S010",
+            },
+        )
+
+        with patch("aiohttp.ClientSession.get") as mock_get:
+            mock_get.return_value.__aenter__.return_value.status = 200
+            mock_get.return_value.__aenter__.return_value.json = AsyncMock(
+                return_value=mock_response
+            )
+
+            result = await courier.track("1234567")
+
+            assert result.status_category == "created"
+            assert result.latest_event.time == "00:05"
+
+    async def test_svuum_delivered(self):
+        """Test Svuum with a delivered shipment."""
+        courier = SvuumCourier()
+
+        mock_response = self._response(
+            {"status": "Επιτυχής Παράδοση", "statusTime": "Feb-15-2026 11:00 AM", "statusCode": "S999"},
+        )
+
+        with patch("aiohttp.ClientSession.get") as mock_get:
+            mock_get.return_value.__aenter__.return_value.status = 200
+            mock_get.return_value.__aenter__.return_value.json = AsyncMock(
+                return_value=mock_response
+            )
+
+            result = await courier.track("1234567")
+
+            assert result.status == "Επιτυχής Παράδοση"
+            assert result.status_category == "delivered"
+
+    async def test_svuum_failed_delivery_not_delivered(self):
+        """Test that a failed delivery attempt is not reported as delivered."""
+        courier = SvuumCourier()
+
+        mock_response = self._response(
+            {"status": "Ανεπιτυχής Παράδοση", "statusTime": "Feb-15-2026 11:00 AM", "statusCode": "S998"},
+        )
+
+        with patch("aiohttp.ClientSession.get") as mock_get:
+            mock_get.return_value.__aenter__.return_value.status = 200
+            mock_get.return_value.__aenter__.return_value.json = AsyncMock(
+                return_value=mock_response
+            )
+
+            result = await courier.track("1234567")
+
+            assert result.status_category == "in_transit"
+
+    async def test_svuum_not_found(self):
+        """Test Svuum with an unknown tracking number (empty list)."""
+        courier = SvuumCourier()
+
+        with patch("aiohttp.ClientSession.get") as mock_get:
+            mock_get.return_value.__aenter__.return_value.status = 200
+            mock_get.return_value.__aenter__.return_value.json = AsyncMock(
+                return_value=[]
+            )
+
+            result = await courier.track("1234567")
+
+            assert result.success is True
+            assert result.status == "Not Found"
+            assert len(result.events) == 0
+
+    async def test_svuum_server_error(self):
+        """Test Svuum with a server error."""
+        courier = SvuumCourier()
+
+        with patch("aiohttp.ClientSession.get") as mock_get:
+            mock_get.return_value.__aenter__.return_value.status = 500
+
+            result = await courier.track("1234567")
+
+            assert result.success is False
+            assert result.status_category == "error"
+            assert "HTTP error" in result.error_message
+
+
+@pytest.mark.asyncio
+class TestAutoDetect:
+    """Tests for auto-detection across couriers."""
+
+    async def test_auto_detect_skips_empty_unknown_results(self):
+        """An empty "Unknown" result must not stop auto-detection."""
+        from custom_components.greek_courier_tracker.couriers import (
+            COURIER_REGISTRY,
+            GenikiCourier,
+            track_with_auto_detect,
+        )
+        from custom_components.greek_courier_tracker.couriers.base import (
+            TrackingEvent,
+            TrackingResult,
+        )
+
+        empty_result = TrackingResult(
+            success=True,
+            tracking_number="1234567",
+            courier="geniki",
+            courier_name="Geniki Taxydromiki",
+            status="Unknown",
+            status_category="unknown",
+            events=[],
+        )
+        event = TrackingEvent(date="2026-02-14", time="17:40", location="", status="In transit")
+        real_result = TrackingResult(
+            success=True,
+            tracking_number="1234567",
+            courier="svuum",
+            courier_name="Svuum",
+            status="In transit",
+            status_category="in_transit",
+            events=[event],
+            latest_event=event,
+        )
+
+        with patch.dict(
+            COURIER_REGISTRY, {"geniki": GenikiCourier, "svuum": SvuumCourier}, clear=True
+        ), patch.object(
+            GenikiCourier, "track", AsyncMock(return_value=empty_result)
+        ), patch.object(
+            SvuumCourier, "track", AsyncMock(return_value=real_result)
+        ), patch("asyncio.sleep", AsyncMock()):
+            result = await track_with_auto_detect("1234567")
+
+        assert result.courier == "svuum"
+        assert result.status == "In transit"
 
 
 @pytest.mark.asyncio
