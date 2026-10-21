@@ -94,13 +94,11 @@ jobs:
           mypy custom_components/greek_courier_tracker/
         continue-on-error: true
 
+  # The image in tests/Dockerfile.test has one Python version (3.12); the
+  # tests job above covers the others
   test-docker:
-    name: Test with Docker (Python ${{ matrix.python-version }})
+    name: Test with Docker
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10", "3.11", "3.12"]
 
     steps:
       - name: Checkout code

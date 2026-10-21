@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -46,6 +47,10 @@ from .tracking import (
 PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.TODO]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 _LOGGER = logging.getLogger(__name__)
+
+# Coordinators take their config entry since Home Assistant 2024.11, and newer
+# versions report coordinators that leave it out
+_COORDINATOR_TAKES_ENTRY = "config_entry" in inspect.signature(DataUpdateCoordinator.__init__).parameters
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up the integration actions and the dashboard card."""
@@ -200,6 +205,7 @@ class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Tracking
             logger=logging.getLogger(__name__),
             name=DOMAIN,
             update_interval=timedelta(hours=scan_interval),
+            **({"config_entry": entry} if _COORDINATOR_TAKES_ENTRY else {}),
         )
         self.tracking_numbers = tracking_numbers
         self.tracking_configs = tracking_configs
