@@ -304,7 +304,95 @@ class TestSpeedExMockedAPI:
 
             assert result.success is True
             assert result.courier == "speedex"
-            assert len(result.events) > 0
+            assert len(result.events) == 2
+            assert result.status_category == "delivered"
+            assert result.latest_event.location == "Αθήνα"
+            assert (result.latest_event.date, result.latest_event.time) == ("15/02/2026", "14:30")
+
+    async def test_speedex_timeline_page(self):
+        """Parse the current speedex.gr timeline (oldest first, date and place on separate lines)."""
+        courier = SpeedExCourier()
+
+        def card(title, date_time, place, phone="", maps=""):
+            return f"""
+            <li class="timeline-item">
+                <div class="timeline-card card border-grey border-lighten-2 col-md-8">
+                    <div class="card-header">
+                        <h4 class="card-title">
+                            {title}
+                        </h4>
+                        <p class="card-subtitle text-muted mb-0 pt-1">
+                            <span class="font-small-3">
+                                {date_time}
+                            </span>
+                        </p>
+                        <p class="card-subtitle text-muted mb-0 pt-1"><span class="font-small-3">
+                            {place}
+                        </span></p>
+                        <p class="card-subtitle text-muted mb-0 pt-1"><span class="font-small-3">
+                            {phone}
+                        </span></p>
+                        {maps}
+                    </div>
+                </div>
+            </li>"""
+
+        mock_html = f"""
+        <html><head><style>.timeline-item:nth-child(even) > .timeline-card {{ float: right; }}</style></head>
+        <body><ul class="timeline">
+            {card("ΑΝΑΜΟΝΗ ΑΝΑΘΕΣΗΣ ΑΠΟ ΑΠΟΣΤΟΛΕΑ", "19/10/2026\n στις\n 15:34", ", ")}
+            {card("ΠΑΡΑΛΑΒΗ ΣΤΟ ΚΑΤΑΣΤΗΜΑ", "20/10/2026\n στις\n 12:56", "ΣΙΔΗΡΟΚΑΣΤΡΟΥ 1-3 , ΒΟΤΑΝΙΚΟΣ, ΑΘΗΝΑ",
+                  "210 5200120", "<p class='card-subtitle'><span class='font-small-3'><a href='https://www.google.com/maps?q=37.98,23.70'>View on Google Maps</a></span></p>")}
+            {card("ΕΙΣΑΓΩΓΗ ΣΕ Δ/Κ", "20/10/2026\n στις\n 19:38", ", ΚΗΦΙΣΙΑ")}
+            {card("ΕΞΑΓΩΓΗ ΑΠΌ Δ/Κ", "21/10/2026\n στις\n 07:07", ", ΚΗΦΙΣΙΑ")}
+        </ul></body></html>
+        """
+
+        with patch("aiohttp.ClientSession.get") as mock_get:
+            mock_get.return_value.__aenter__.return_value.status = 200
+            mock_get.return_value.__aenter__.return_value.text = AsyncMock(
+                return_value=mock_html
+            )
+
+            result = await courier.track("700049628797")
+
+        assert result.success is True
+        assert result.status_category == "in_transit"
+        assert result.status == "Left the Hub"
+        assert [event.status for event in result.events] == [
+            "ΕΞΑΓΩΓΗ ΑΠΌ Δ/Κ",
+            "ΕΙΣΑΓΩΓΗ ΣΕ Δ/Κ",
+            "ΠΑΡΑΛΑΒΗ ΣΤΟ ΚΑΤΑΣΤΗΜΑ",
+            "ΑΝΑΜΟΝΗ ΑΝΑΘΕΣΗΣ ΑΠΟ ΑΠΟΣΤΟΛΕΑ",
+        ]
+        latest = result.latest_event
+        assert (latest.date, latest.time, latest.location) == ("21/10/2026", "07:07", "ΚΗΦΙΣΙΑ")
+        assert result.events[2].location == "ΣΙΔΗΡΟΚΑΣΤΡΟΥ 1-3, ΒΟΤΑΝΙΚΟΣ, ΑΘΗΝΑ"
+        assert result.events[2].status_translated == "Picked Up"
+        assert result.events[3].location == ""
+
+    async def test_speedex_created_and_not_found(self):
+        """A voucher the sender hasn't handed over yet is "created"; unknown numbers are not found."""
+        courier = SpeedExCourier()
+        created_html = """
+        <div class="timeline-card"><h4 class="card-title">ΑΝΑΜΟΝΗ ΑΝΑΘΕΣΗΣ ΑΠΟ ΑΠΟΣΤΟΛΕΑ</h4>
+        <span class="font-small-3">19/10/2026 στις 15:34</span><span class="font-small-3">, </span></div>
+        """
+        not_found_html = '<div class="col-md-4 text-center alert alert-warning mt-3">Δεν βρέθηκαν αποτελέσματα.</div>'
+
+        with patch("aiohttp.ClientSession.get") as mock_get:
+            mock_get.return_value.__aenter__.return_value.status = 200
+            mock_get.return_value.__aenter__.return_value.text = AsyncMock(
+                side_effect=[created_html, not_found_html]
+            )
+
+            created = await courier.track("700049628797")
+            not_found = await courier.track("700000000001")
+
+        assert created.status_category == "created"
+        assert created.status == "Shipment Created"
+        assert not_found.status == "Not Found"
+        assert not_found.events == []
 
 
 def _geniki_response(tracking_number, *checkpoints):

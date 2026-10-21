@@ -20,6 +20,7 @@ class ELTACourier(BaseCourier):
     
     API_URL = "https://www.elta-courier.gr/track.php"
     BASE_URL = "https://www.elta-courier.gr"
+    TRACKING_PAGE_URL = f"{BASE_URL}/search?br={{tracking_number}}"
     
     # Tracking number patterns
     # ELTA uses various 2-letter prefixes (SE, EL, PW, etc.) + 9 digits + GR

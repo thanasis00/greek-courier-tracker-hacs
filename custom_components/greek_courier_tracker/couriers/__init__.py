@@ -28,6 +28,7 @@ __all__ = [
     "SkroutzCourier",
     "SvuumCourier",
     "get_courier",
+    "tracking_page_url",
     "track_with_auto_detect",
     "_track_with_retry",
 ]
@@ -64,6 +65,12 @@ def get_courier(
     if courier_class:
         return courier_class(session)
     return None
+
+
+def tracking_page_url(courier_code: str, tracking_number: str) -> str | None:
+    """Return the courier's own tracking page for a number, if it has one."""
+    courier_class = COURIER_REGISTRY.get(courier_code)
+    return courier_class.tracking_page_url(tracking_number) if courier_class else None
 
 
 def couriers_by_likelihood(tracking_number: str) -> list[type[BaseCourier]]:

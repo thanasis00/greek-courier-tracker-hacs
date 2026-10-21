@@ -13,6 +13,7 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, SIGNAL_TRACKING_ADDED, SIGNAL_TRACKING_CHANGED
+from .couriers import tracking_page_url
 from .couriers.base import TrackingEvent, TrackingResult
 from .owners import owner_name
 from .tracking import get_tracking_data, sensor_unique_id, status_text
@@ -149,6 +150,7 @@ class GreekCourierTrackingSensor(CoordinatorEntity, SensorEntity):
             "owner": owner_name(self.hass, self._owner) if self.hass else None,
             "courier": result.courier,
             "courier_name": result.courier_name,
+            "tracking_url": _tracking_url(result),
             "status": result.status,
             "status_el": status_text(result, "el"),
             "status_category": result.status_category,
@@ -182,6 +184,14 @@ class GreekCourierTrackingSensor(CoordinatorEntity, SensorEntity):
     def _get_result(self) -> TrackingResult | None:
         data = self.coordinator.data or {}
         return data.get(self._tracking_number)
+
+
+def _tracking_url(result: TrackingResult) -> str | None:
+    """Return the courier's own tracking page, once a courier has found the shipment."""
+    if not result.success or result.status in ("Not Found", "Error"):
+        return None
+    courier = str(getattr(result.courier, "value", result.courier))
+    return tracking_page_url(courier, result.tracking_number)
 
 
 def _serialize_events(events: list[TrackingEvent]) -> list[dict[str, Any]]:

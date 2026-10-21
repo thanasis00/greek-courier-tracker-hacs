@@ -12,6 +12,7 @@ from custom_components.greek_courier_tracker.couriers import (
     SkroutzCourier,
     SvuumCourier,
     get_courier,
+    tracking_page_url,
 )
 from custom_components.greek_courier_tracker.couriers.base import TrackingResult, TrackingEvent
 
@@ -136,6 +137,28 @@ class TestCourierFactory:
 
         assert isinstance(get_courier("skroutz"), SkroutzCourier)
         assert isinstance(get_courier("svuum"), SvuumCourier)
+
+    def test_tracking_page_urls(self):
+        """Every courier links to its own tracking page with the number filled in."""
+        assert tracking_page_url("acs", "7203411234") == (
+            "https://www.acscourier.net/el/myacs/anafores-apostolwn/anazitisi-apostolwn/?trackingNumber=7203411234"
+        )
+        assert tracking_page_url("box_now", "4916856544") == "https://boxnow.gr/?track=4916856544"
+        assert tracking_page_url("courier_center", "1234567890") == (
+            "https://www.courier.gr/track/result?tracknr=1234567890"
+        )
+        assert tracking_page_url("elta", "SE123456789GR") == "https://www.elta-courier.gr/search?br=SE123456789GR"
+        assert tracking_page_url("geniki", "5194247074") == "https://taxydromiki.com/track/5194247074/"
+        assert tracking_page_url("skroutz", "E8GYRRONRYKL9") == "https://www.skroutz.gr/track/E8GYRRONRYKL9"
+        assert tracking_page_url("speedex", "700049628797") == (
+            "https://www.speedex.gr/isapohi.asp?voucher_code=700049628797"
+        )
+        assert tracking_page_url("svuum", "3416482").endswith("&tracking_number=3416482")
+
+    def test_tracking_page_url_escapes_number(self):
+        """Odd characters in a number can't change the link."""
+        assert tracking_page_url("elta", "A&b=1/2") == "https://www.elta-courier.gr/search?br=A%26b%3D1%2F2"
+        assert tracking_page_url("unknown", "123") is None
 
     def test_get_invalid_courier(self):
         """Test getting invalid courier returns None."""

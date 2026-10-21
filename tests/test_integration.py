@@ -257,6 +257,7 @@ class TestSensorEntity:
         assert attrs["tracking_number"] == "SE123456789GR"
         assert attrs["courier"] == "elta"
         assert attrs["courier_name"] == "ELTA Courier"
+        assert attrs["tracking_url"] == "https://www.elta-courier.gr/search?br=SE123456789GR"
         assert attrs["status"] == "Delivered"
         assert attrs["status_category"] == "delivered"
         assert attrs["delivered"] is True

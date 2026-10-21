@@ -20,6 +20,7 @@ class BoxNowCourier(BaseCourier):
     
     API_URL = "https://api-production.boxnow.gr/api/v1/parcels:track"
     BASE_URL = "https://boxnow.gr"
+    TRACKING_PAGE_URL = f"{BASE_URL}/?track={{tracking_number}}"
     
     # Tracking number patterns
     PATTERNS = [

@@ -25,6 +25,7 @@ class GenikiCourier(BaseCourier):
     # Same endpoint the taxydromiki.com/track/<number> page calls from the browser
     API_URL = "https://taxydromiki.com/external_scripts/track-site.php"
     BASE_URL = "https://taxydromiki.com"
+    TRACKING_PAGE_URL = f"{BASE_URL}/track/{{tracking_number}}/"
 
     # Tracking number patterns
     PATTERNS = [

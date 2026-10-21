@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Any
 
 import aiohttp
@@ -19,7 +20,9 @@ class SpeedExCourier(BaseCourier):
     COURIER_CODE = CourierType.SPEEDEX
     COURIER_NAME = "SpeedEx"
     
-    TRACKING_URL = "http://www.speedex.gr/speedex/NewTrackAndTrace.aspx"
+    # Page shown in an iframe by the speedex.gr tracking page
+    TRACKING_URL = "https://www.speedex.gr/speedex/NewTrackAndTrace.aspx"
+    TRACKING_PAGE_URL = "https://www.speedex.gr/isapohi.asp?voucher_code={tracking_number}"
     
     # Tracking number patterns
     PATTERNS = [
@@ -27,13 +30,25 @@ class SpeedExCourier(BaseCourier):
         r"^\d{9}[A-Z]{2}$",  # 9 digits + 2 letters
     ]
     
-    # Status translations
+    # Status translations (matched without Greek accents)
     STATUS_TRANSLATIONS = {
         "Η ΑΠΟΣΤΟΛΗ ΠΑΡΑΔΟΘΗΚΕ": "Delivered",
+        "ΑΝΑΜΟΝΗ ΑΝΑΘΕΣΗΣ ΑΠΟ ΑΠΟΣΤΟΛΕΑ": "Shipment Created",
+        "ΠΑΡΑΛΑΒΗ ΣΤΟ ΚΑΤΑΣΤΗΜΑ": "Picked Up",
+        "ΕΞΑΓΩΓΗ ΑΠΟ ΚΑΤΑΣΤΗΜΑ": "Left the Store",
+        "ΕΙΣΑΓΩΓΗ ΣΕ Δ/Κ": "Arrived at Hub",
+        "ΕΞΑΓΩΓΗ ΑΠΟ Δ/Κ": "Left the Hub",
+        "ΕΙΣΑΓΩΓΗ ΣΕ ΚΑΤΑΣΤΗΜΑ": "Arrived at Store",
         "ΣΕ ΜΕΤΑΦΟΡΑ": "In Transit",
         "ΠΑΡΑΛΑΒΗ": "Picked Up",
         "ΑΠΟΣΤΟΛΗ": "Shipped",
     }
+
+    # The sender has created the voucher but not handed the parcel over yet
+    CREATED_KEYWORDS = ["αναμονη αναθεσης"]
+
+    DATE_TIME = re.compile(r"(\d{1,2}/\d{1,2}/\d{4})(?:\s*στις\s*(\d{1,2}:\d{2}))?")
+    PHONE = re.compile(r"^[\d\s+()-]+$")
 
     async def track(self, tracking_number: str) -> TrackingResult:
         """Track a SpeedEx shipment by scraping their website."""
@@ -118,53 +133,22 @@ class SpeedExCourier(BaseCourier):
         for card in cards:
             # Get status description
             title_elem = card.find("h4", {"class": "card-title"})
-            status = title_elem.text.strip() if title_elem else ""
-            
-            # Get location and date/time
-            info_elem = card.find("span", {"class": "font-small-3"})
-            info_text = info_elem.text.strip() if info_elem else ""
-            
-            # Parse: "Αθήνα, 15/01/2025 στις 14:30"
-            location = ""
-            date = ""
-            time = ""
-            
-            if info_text:
-                parts = info_text.split(", ")
-                if len(parts) >= 2:
-                    location = parts[0]
-                    date_time = parts[1]
-                    # Parse date and time
-                    if "στις" in date_time:
-                        date_part, time_part = date_time.split(" στις ")
-                        date = date_part.strip()
-                        time = time_part.strip()
-                    else:
-                        date = date_time
+            status = " ".join(title_elem.text.split()) if title_elem else ""
+            date, time, location = self._parse_card_info(card)
             
             events.append(TrackingEvent(
                 date=date,
                 time=time,
                 location=location,
                 status=status,
-                status_translated=self.translate_status(status, self.STATUS_TRANSLATIONS),
+                status_translated=self.translate_status(self._normalize(status), self.STATUS_TRANSLATIONS),
             ))
+        
+        # The page lists the events oldest first; keep newest first like the other couriers
+        events = sorted(reversed(events), key=self._event_time, reverse=True)
         
         latest = events[0] if events else None
         status = latest.status_translated if latest else "Unknown"
-        
-        # Check if delivered
-        is_delivered = any(
-            e.status.upper() == "Η ΑΠΟΣΤΟΛΗ ΠΑΡΑΔΟΘΗΚΕ" 
-            for e in events
-        )
-        
-        category = "delivered" if is_delivered else self.get_status_category(
-            status,
-            ["παραδόθηκ", "delivered"],
-            ["μεταφορ", "transit"],
-            ["παραλαβή", "picked"]
-        )
         
         return TrackingResult(
             success=True,
@@ -172,7 +156,50 @@ class SpeedExCourier(BaseCourier):
             courier=self.COURIER_CODE,
             courier_name=self.COURIER_NAME,
             status=status,
-            status_category=category,
+            status_category=self._get_category(soup, events),
             events=events,
             latest_event=latest,
         )
+
+    def _parse_card_info(self, card: Any) -> tuple[str, str, str]:
+        """Read the date, time and place of a timeline card.
+
+        The card has a line with "19/10/2026 στις 15:34", one with the store
+        address (", ΚΗΦΙΣΙΑ" when it has none) and one with its phone number.
+        Older pages had "Αθήνα, 15/01/2025 στις 14:30" on a single line.
+        """
+        date = time = location = ""
+        for span in card.find_all("span", {"class": "font-small-3"}):
+            # "View on Google Maps"
+            if span.find("a"):
+                continue
+            text = " ".join(span.text.split())
+            match = self.DATE_TIME.search(text)
+            if match and not date:
+                date, time = match.group(1), match.group(2) or ""
+                text = text[:match.start()] + text[match.end():]
+            text = ", ".join(part.strip() for part in text.split(",") if part.strip())
+            if text and not location and not self.PHONE.match(text):
+                location = text
+        return date, time, location
+
+    def _event_time(self, event: TrackingEvent) -> datetime:
+        """Sortable time of an event (events without one sort last)."""
+        try:
+            return datetime.strptime(f"{event.date} {event.time or '00:00'}", "%d/%m/%Y %H:%M")
+        except ValueError:
+            return datetime.min
+
+    def _get_category(self, soup: BeautifulSoup, events: list[TrackingEvent]) -> str:
+        """Determine the status category from all the events."""
+        if not events:
+            return "unknown"
+        statuses = [self._normalize(event.status) for event in events]
+        # The website colours the delivery event with "delivered-speedex"
+        if soup.find(class_="delivered-speedex") or any(
+            "παραδοθηκε" in status and "δεν " not in status for status in statuses
+        ):
+            return "delivered"
+        if all(any(keyword in status for keyword in self.CREATED_KEYWORDS) for status in statuses):
+            return "created"
+        return "in_transit"

@@ -55,6 +55,10 @@ const STRINGS = {
     not_found: "Not found yet",
     unavailable: "Unavailable",
     expected: "Expected",
+    copy: "Copy tracking number",
+    copied: "Tracking number copied",
+    copy_failed: "Couldn't copy the tracking number",
+    open_site: (courier) => `Track on the ${courier || "courier's"} website`,
   },
   el: {
     title: "Αποστολές",
@@ -79,6 +83,10 @@ const STRINGS = {
     not_found: "Δεν βρέθηκε ακόμα",
     unavailable: "Μη διαθέσιμο",
     expected: "Αναμένεται",
+    copy: "Αντιγραφή αριθμού",
+    copied: "Ο αριθμός αντιγράφηκε",
+    copy_failed: "Δεν ήταν δυνατή η αντιγραφή",
+    open_site: (courier) => `Παρακολούθηση στη σελίδα της εταιρείας${courier ? ` (${courier})` : ""}`,
   },
 };
 
@@ -115,14 +123,19 @@ const STYLES = `
   .bar i.done { background: var(--success-color, #43a047); }
   .bar.pending i { animation: pulse 1.4s ease-in-out infinite; }
   @keyframes pulse { 50% { opacity: 0.35; } }
-  .meta { display: flex; align-items: flex-start; justify-content: space-between; gap: 4px 12px; margin-top: 8px; font-size: 13px; color: var(--secondary-text-color); }
-  .info { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; min-width: 0; }
+  .details, .foot { display: flex; align-items: center; gap: 4px 14px; margin-top: 8px; font-size: 13px; line-height: 20px; color: var(--secondary-text-color); }
+  .details { flex-wrap: wrap; }
+  .foot { align-items: flex-start; justify-content: space-between; gap: 4px 12px; }
+  .ids { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; min-width: 0; }
   .actions { flex: none; display: flex; align-items: center; gap: 12px; }
-  .meta ha-icon { --mdc-icon-size: 16px; vertical-align: -3px; margin-right: 2px; }
-  .actions ha-icon { margin-right: 0; }
-  .mono { font-family: var(--code-font-family, ui-monospace, monospace); }
-  button.link { font: inherit; font-size: 13px; color: inherit; background: none; border: none; padding: 0; cursor: pointer; display: inline-flex; align-items: center; }
-  button.link:hover { color: var(--primary-text-color); }
+  .chip { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; }
+  .chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .details ha-icon, .foot ha-icon { --mdc-icon-size: 16px; flex: none; }
+  .number { display: inline-flex; align-items: center; gap: 8px; }
+  .number ha-icon { --mdc-icon-size: 14px; }
+  .mono, button.link.mono { font-family: var(--code-font-family, ui-monospace, monospace); }
+  button.link, a.link { font: inherit; font-size: 13px; color: inherit; background: none; border: none; padding: 0; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; text-decoration: none; }
+  button.link:hover, a.link:hover { color: var(--primary-text-color); }
   button.remove.armed { color: var(--error-color); }
   select.owner-edit { width: auto; height: 28px; font-size: 13px; padding: 0 6px; }
   .timeline { margin: 10px 0 0 6px; padding-left: 14px; border-left: 2px solid var(--divider-color); font-size: 13px; color: var(--primary-text-color); }
@@ -265,6 +278,8 @@ class GreekCourierTrackerCard extends HTMLElement {
           entityId: stateObj.entity_id,
           name,
           trackingNumber: attrs.tracking_number || "",
+          // Only links to the courier websites, never other schemes
+          trackingUrl: /^https?:\/\//.test(attrs.tracking_url || "") ? attrs.tracking_url : "",
           ownerUserId: attrs.owner_user_id || "",
           ownerName: attrs.owner || "",
           courierName: attrs.courier && attrs.courier !== "unknown" ? courierLabels[attrs.courier] || attrs.courier_name || "" : "",
@@ -462,6 +477,8 @@ class GreekCourierTrackerCard extends HTMLElement {
     if (action === "toggle") {
       this._expanded.has(id) ? this._expanded.delete(id) : this._expanded.add(id);
       this._update();
+    } else if (action === "copy") {
+      this._copy(target);
     } else if (action === "more-info") {
       this.dispatchEvent(new CustomEvent("hass-more-info", {
         detail: { entityId: id }, bubbles: true, composed: true,
@@ -501,6 +518,50 @@ class GreekCourierTrackerCard extends HTMLElement {
     }
   }
 
+  async _copy(button) {
+    const t = this._t;
+    let copied;
+    try {
+      await navigator.clipboard.writeText(button.dataset.id);
+      copied = true;
+    } catch (err) {
+      // No clipboard API on plain http (local network), or no permission
+      copied = this._copyWithSelection(button.dataset.id);
+    }
+    if (!copied) {
+      this._toast(t.copy_failed);
+      return;
+    }
+    this._toast(t.copied);
+    const icon = button.querySelector("ha-icon");
+    icon?.setAttribute("icon", "mdi:check");
+    setTimeout(() => icon?.setAttribute("icon", "mdi:content-copy"), 1500);
+  }
+
+  /** Copy the old way, through a selected (invisible) text field. */
+  _copyWithSelection(text) {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.cssText = "position: fixed; top: 0; left: 0; opacity: 0;";
+    document.body.appendChild(area);
+    area.focus();
+    area.select();
+    try {
+      return document.execCommand("copy");
+    } catch (err) {
+      return false;
+    } finally {
+      area.remove();
+    }
+  }
+
+  _toast(message) {
+    this.dispatchEvent(new CustomEvent("hass-notification", {
+      detail: { message }, bubbles: true, composed: true,
+    }));
+  }
+
   async _onOwnerChange(event) {
     const select = event.target.closest("select.owner-edit");
     if (!select) return;
@@ -530,6 +591,16 @@ class GreekCourierTrackerCard extends HTMLElement {
     return `<button class="link" data-action="owner" data-id="${escapeHtml(shipment.trackingNumber)}" title="${escapeHtml(t.change_owner)}"><ha-icon icon="${icon}"></ha-icon>${escapeHtml(label)}</button>`;
   }
 
+  /** Tracking number that copies itself, with a link to the courier's own page. */
+  _numberTag(number, url = "", courierName = "") {
+    const t = this._t;
+    const copy = `<button class="link mono" data-action="copy" data-id="${escapeHtml(number)}" title="${escapeHtml(t.copy)}">${escapeHtml(number)}<ha-icon icon="mdi:content-copy"></ha-icon></button>`;
+    const open = url
+      ? `<a class="link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(t.open_site(courierName))}" aria-label="${escapeHtml(t.open_site(courierName))}"><ha-icon icon="mdi:open-in-new"></ha-icon></a>`
+      : "";
+    return `<span class="number">${copy}${open}</span>`;
+  }
+
   _bar(category, pending = false) {
     const steps = { created: 1, in_transit: 2, delivered: 3 }[category] || 0;
     const cls = category === "delivered" ? "done" : "on";
@@ -550,7 +621,7 @@ class GreekCourierTrackerCard extends HTMLElement {
         <div class="head"><span class="name">${escapeHtml(pending.name)}</span></div>
         <div class="status muted">${escapeHtml(t.searching)}</div>
         ${this._bar("unknown", true)}
-        <div class="meta"><div class="info"><span class="mono">${escapeHtml(number)}</span></div></div>
+        <div class="foot"><div class="ids">${this._numberTag(number)}</div></div>
       </div>`);
 
     const rows = shipments.map((s) => {
@@ -563,13 +634,17 @@ class GreekCourierTrackerCard extends HTMLElement {
       const statusText = this._statusText(s);
       const muted = s.unavailable || s.statusEn === "Not Found";
 
-      const info = [
-        delivered && s.courierName ? `<span>${escapeHtml(s.courierName)}</span>` : "",
-        s.place ? `<span><ha-icon icon="mdi:map-marker-outline"></ha-icon>${escapeHtml(s.place)}</span>` : "",
-        s.when ? `<span><ha-icon icon="mdi:clock-outline"></ha-icon>${escapeHtml(s.when.label)}</span>` : "",
-        !delivered && s.eta ? `<span><ha-icon icon="mdi:calendar-clock"></ha-icon>${escapeHtml(t.expected)} ${escapeHtml(s.eta.label)}</span>` : "",
+      const chip = (icon, text) =>
+        `<span class="chip" title="${escapeHtml(text)}"><ha-icon icon="${icon}"></ha-icon><span>${escapeHtml(text)}</span></span>`;
+      const details = [
+        delivered && s.courierName ? chip("mdi:truck-outline", s.courierName) : "",
+        s.place ? chip("mdi:map-marker-outline", s.place) : "",
+        s.when ? chip("mdi:clock-outline", s.when.label) : "",
+        !delivered && s.eta ? chip("mdi:calendar-clock", `${t.expected} ${s.eta.label}`) : "",
+      ].filter(Boolean).join("");
+      const ids = [
+        s.trackingNumber ? this._numberTag(s.trackingNumber, s.trackingUrl, s.courierName) : "",
         this._ownerTag(s, people),
-        s.trackingNumber ? `<span class="mono">${escapeHtml(s.trackingNumber)}</span>` : "",
       ].filter(Boolean).join("");
       const actions = [
         s.events.length
@@ -597,7 +672,8 @@ class GreekCourierTrackerCard extends HTMLElement {
           </div>
           ${delivered ? "" : `<div class="status${muted ? " muted" : ""}">${escapeHtml(statusText)}</div>`}
           ${this._bar(s.category)}
-          <div class="meta"><div class="info">${info}</div><div class="actions">${actions}</div></div>
+          ${details ? `<div class="details">${details}</div>` : ""}
+          <div class="foot"><div class="ids">${ids}</div><div class="actions">${actions}</div></div>
           ${timeline}
         </div>`;
     });

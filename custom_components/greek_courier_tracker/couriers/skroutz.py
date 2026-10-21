@@ -22,6 +22,7 @@ class SkroutzCourier(BaseCourier):
     # Same endpoint the skroutz.gr/track/<code> page calls from the browser
     API_URL = "https://api.sendx.gr/user/hp/{tracking_number}"
     BASE_URL = "https://www.skroutz.gr"
+    TRACKING_PAGE_URL = f"{BASE_URL}/track/{{tracking_number}}"
 
     # Tracking number patterns
     PATTERNS = [

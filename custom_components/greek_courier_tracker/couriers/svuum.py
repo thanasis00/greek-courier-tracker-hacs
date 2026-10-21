@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import unicodedata
 from typing import Any
 
 import aiohttp
@@ -24,6 +23,11 @@ class SvuumCourier(BaseCourier):
     BASE_URL = "https://live.svuum.com"
     COMPANY_CODE = "svm"
     PROCESS_MASTER_ID = "5630"  # "Website Tracking" process used by svuum.gr
+    # The page svuum.gr opens in an iframe (svuum.gr itself has no link per number)
+    TRACKING_PAGE_URL = (
+        f"{BASE_URL}/track.html?com_code={COMPANY_CODE}&pm_Id={PROCESS_MASTER_ID}"
+        "&track_page_version=v1&only_latest=false&tracking_number={tracking_number}"
+    )
 
     # Tracking number patterns
     PATTERNS = [
@@ -177,11 +181,6 @@ class SvuumCourier(BaseCourier):
         if status_code == "S010" or any(keyword in text for keyword in self.CREATED_KEYWORDS):
             return "created"
         return "in_transit"
-
-    def _normalize(self, text: str) -> str:
-        """Lowercase text and strip Greek accents for keyword matching."""
-        decomposed = unicodedata.normalize("NFD", text.lower())
-        return "".join(char for char in decomposed if unicodedata.category(char) != "Mn")
 
     def _parse_status_time(self, status_time: str) -> tuple[str, str]:
         """Parse FarEye time ("Oct-19-2026 05:40 PM") into date and 24h time."""

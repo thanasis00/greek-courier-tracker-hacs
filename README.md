@@ -176,6 +176,7 @@ action:
 | `tracking_name` | The name you gave the shipment |
 | `owner`, `owner_user_id` | Name and user ID of the owner (empty for shared shipments) |
 | `courier_name` | Full courier name |
+| `tracking_url` | The shipment on the courier's own website |
 | `status` | Current status in English |
 | `status_el` | Current status in Greek |
 | `status_category` | delivered, in_transit, created, unknown |

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import unicodedata
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+from urllib.parse import quote
 
 import aiohttp
 
@@ -46,6 +48,8 @@ class BaseCourier(ABC):
     # Subclasses must define these
     COURIER_CODE: str = ""
     COURIER_NAME: str = ""
+    # The courier's own tracking page, with a {tracking_number} placeholder
+    TRACKING_PAGE_URL: str = ""
 
     def __init__(self, session: aiohttp.ClientSession | None = None) -> None:
         """Use the given HTTP session (Home Assistant's shared one), if any."""
@@ -71,6 +75,18 @@ class BaseCourier(ABC):
             TrackingResult with shipment status and events
         """
         pass
+
+    @classmethod
+    def tracking_page_url(cls, tracking_number: str) -> str | None:
+        """Return the courier's own tracking page for a number, if it has one."""
+        if not cls.TRACKING_PAGE_URL:
+            return None
+        return cls.TRACKING_PAGE_URL.format(tracking_number=quote(tracking_number, safe=""))
+
+    def _normalize(self, text: str) -> str:
+        """Lowercase text and strip Greek accents for keyword matching."""
+        decomposed = unicodedata.normalize("NFD", text.lower())
+        return "".join(char for char in decomposed if unicodedata.category(char) != "Mn")
 
     def translate_status(self, status: str, translations: dict[str, str]) -> str:
         """Translate Greek status to English.

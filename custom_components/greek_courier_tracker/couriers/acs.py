@@ -23,6 +23,7 @@ class ACSCourier(BaseCourier):
     BASE_URL = "https://www.acscourier.net"
     # The tracking page carries the public token the API expects
     TOKEN_PAGE_URL = f"{BASE_URL}/el/myacs/anafores-apostolwn/anazitisi-apostolwn/"
+    TRACKING_PAGE_URL = f"{TOKEN_PAGE_URL}?trackingNumber={{tracking_number}}"
     TOKEN_MAX_AGE = 30 * 60  # seconds
 
     # Tracking number patterns (10 digits)

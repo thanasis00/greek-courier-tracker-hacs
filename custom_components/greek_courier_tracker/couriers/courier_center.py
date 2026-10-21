@@ -20,6 +20,7 @@ class CourierCenterCourier(BaseCourier):
     COURIER_NAME = "Courier Center"
 
     TRACKING_URL = "https://www.courier.gr/track/result"
+    TRACKING_PAGE_URL = f"{TRACKING_URL}?tracknr={{tracking_number}}"
 
     # Tracking number patterns
     PATTERNS = [
