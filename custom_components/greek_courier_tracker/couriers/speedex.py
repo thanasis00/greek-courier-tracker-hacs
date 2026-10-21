@@ -132,7 +132,8 @@ class SpeedExCourier(BaseCourier):
         
         for card in cards:
             # Get status description
-            title_elem = card.find("h4", {"class": "card-title"})
+            # The delivery card is styled with "delivered-title" (and "delivered-speedex")
+            title_elem = card.find("h4", {"class": "card-title"}) or card.find("h4")
             status = " ".join(title_elem.text.split()) if title_elem else ""
             date, time, location = self._parse_card_info(card)
             
@@ -141,7 +142,9 @@ class SpeedExCourier(BaseCourier):
                 time=time,
                 location=location,
                 status=status,
-                status_translated=self.translate_status(self._normalize(status), self.STATUS_TRANSLATIONS),
+                status_translated=(
+                    self.translate_status(self._normalize(status), self.STATUS_TRANSLATIONS) if status else ""
+                ),
             ))
         
         # The page lists the events oldest first; keep newest first like the other couriers

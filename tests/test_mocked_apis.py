@@ -371,6 +371,61 @@ class TestSpeedExMockedAPI:
         assert result.events[2].status_translated == "Picked Up"
         assert result.events[3].location == ""
 
+    async def test_speedex_delivered_card(self):
+        """The last card, "Η ΑΠΟΣΤΟΛΗ ΠΑΡΑΔΟΘΗΚΕ", is styled differently by the website."""
+        courier = SpeedExCourier()
+        mock_html = """
+        <style>.delivered-speedex { background-color: #0074bb !important; }</style>
+        <li class="timeline-item"><div class="timeline-card card border-grey border-lighten-2 col-md-8">
+            <h4 class="card-title">ΕΞΑΓΩΓΗ ΑΠΌ Δ/Κ</h4>
+            <span class="font-small-3">21/10/2026 στις 07:07</span><span class="font-small-3">, ΚΗΦΙΣΙΑ</span>
+        </div></li>
+        <li class="timeline-item"><div class="timeline-card card delivered-speedex col-md-8">
+            <h4 class="card-title delivered-title">
+                Η ΑΠΟΣΤΟΛΗ ΠΑΡΑΔΟΘΗΚΕ
+            </h4>
+            <p class="card-subtitle delivered-subtitle"><span class="font-small-3">22/10/2026
+                στις
+                    11:40</span></p>
+            <p class="card-subtitle delivered-subtitle"><span class="font-small-3">, ΑΘΗΝΑ</span></p>
+        </div></li>
+        """
+
+        with patch("aiohttp.ClientSession.get") as mock_get:
+            mock_get.return_value.__aenter__.return_value.status = 200
+            mock_get.return_value.__aenter__.return_value.text = AsyncMock(
+                return_value=mock_html
+            )
+
+            result = await courier.track("700049628797")
+
+        assert result.status_category == "delivered"
+        assert result.status == "Delivered"
+        latest = result.latest_event
+        assert (latest.status, latest.date, latest.time, latest.location) == (
+            "Η ΑΠΟΣΤΟΛΗ ΠΑΡΑΔΟΘΗΚΕ", "22/10/2026", "11:40", "ΑΘΗΝΑ"
+        )
+
+    async def test_speedex_css_alone_is_not_delivered(self):
+        """Every page has the "delivered-speedex" style rule; only an element with it counts."""
+        courier = SpeedExCourier()
+        mock_html = """
+        <style>.delivered-speedex { background-color: #0074bb !important; }</style>
+        <div class="timeline-card"><h4 class="card-title">ΕΙΣΑΓΩΓΗ ΣΕ ΚΑΤΑΣΤΗΜΑ</h4>
+        <span class="font-small-3">21/10/2026 στις 09:00</span><span class="font-small-3">, ΑΘΗΝΑ</span></div>
+        """
+
+        with patch("aiohttp.ClientSession.get") as mock_get:
+            mock_get.return_value.__aenter__.return_value.status = 200
+            mock_get.return_value.__aenter__.return_value.text = AsyncMock(
+                return_value=mock_html
+            )
+
+            result = await courier.track("700049628797")
+
+        assert result.status_category == "in_transit"
+        assert result.status == "Arrived at Store"
+
     async def test_speedex_created_and_not_found(self):
         """A voucher the sender hasn't handed over yet is "created"; unknown numbers are not found."""
         courier = SpeedExCourier()
