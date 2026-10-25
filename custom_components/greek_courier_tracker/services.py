@@ -75,6 +75,34 @@ def get_target_entry(hass: HomeAssistant, entry_id: str | None = None) -> Config
     return (loaded or entries)[0]
 
 
+def get_tracking_entries(
+    hass: HomeAssistant, tracking_numbers: list[str], entry_id: str | None = None
+) -> list[tuple[ConfigEntry, list[str]]]:
+    """Return the entries that track the given numbers, each with its own numbers.
+
+    Without an entry ID every entry is searched: older versions allowed several
+    entries, and the card shows the shipments of all of them.
+    """
+    if entry_id:
+        return [(get_target_entry(hass, entry_id), tracking_numbers)]
+
+    entries = hass.config_entries.async_entries(DOMAIN)
+    if not entries:
+        raise ServiceValidationError("Set up the Greek Courier Tracker integration first")
+
+    wanted = {normalize_tracking_number(number) for number in tracking_numbers}
+    found: list[tuple[ConfigEntry, list[str]]] = []
+    for entry in entries:
+        numbers = wanted & {item["tracking_number"] for item in get_tracking_data(entry)}
+        if numbers:
+            found.append((entry, sorted(numbers)))
+
+    missing = wanted.difference(*(numbers for _, numbers in found))
+    if missing:
+        raise ServiceValidationError(f"{', '.join(sorted(missing))} is not tracked")
+    return found
+
+
 async def async_add_tracking(hass: HomeAssistant, call: ServiceCall) -> None:
     """Handle the add_tracking action."""
     entry = get_target_entry(hass, call.data.get(ATTR_CONFIG_ENTRY_ID))
@@ -105,29 +133,35 @@ async def async_add_tracking(hass: HomeAssistant, call: ServiceCall) -> None:
 
 async def async_remove_tracking(hass: HomeAssistant, call: ServiceCall) -> None:
     """Handle the remove_tracking action."""
-    entry = get_target_entry(hass, call.data.get(ATTR_CONFIG_ENTRY_ID))
+    targets = get_tracking_entries(hass, call.data[ATTR_TRACKING_NUMBER], call.data.get(ATTR_CONFIG_ENTRY_ID))
 
     try:
-        tracking_data = remove_tracking_items(get_tracking_data(entry), call.data[ATTR_TRACKING_NUMBER])
+        changes = [
+            (entry, remove_tracking_items(get_tracking_data(entry), numbers)) for entry, numbers in targets
+        ]
     except TrackingNumberNotFoundError as err:
         raise ServiceValidationError(f"{err} is not tracked") from err
 
     _LOGGER.info("Removing tracking number(s) %s via action", call.data[ATTR_TRACKING_NUMBER])
-    save_tracking_data(hass, entry, tracking_data)
+    for entry, tracking_data in changes:
+        save_tracking_data(hass, entry, tracking_data)
 
 
 async def async_set_owner(hass: HomeAssistant, call: ServiceCall) -> None:
     """Handle the set_owner action."""
-    entry = get_target_entry(hass, call.data.get(ATTR_CONFIG_ENTRY_ID))
+    targets = get_tracking_entries(hass, call.data[ATTR_TRACKING_NUMBER], call.data.get(ATTR_CONFIG_ENTRY_ID))
     owner = await async_resolve_owner(hass, call.data.get(ATTR_OWNER))
 
     try:
-        tracking_data = set_tracking_owner(get_tracking_data(entry), call.data[ATTR_TRACKING_NUMBER], owner)
+        changes = [
+            (entry, set_tracking_owner(get_tracking_data(entry), numbers, owner)) for entry, numbers in targets
+        ]
     except TrackingNumberNotFoundError as err:
         raise ServiceValidationError(f"{err} is not tracked") from err
 
     _LOGGER.info("Setting the owner of %s via action", call.data[ATTR_TRACKING_NUMBER])
-    save_tracking_data(hass, entry, tracking_data)
+    for entry, tracking_data in changes:
+        save_tracking_data(hass, entry, tracking_data)
 
 
 def async_setup_services(hass: HomeAssistant) -> None:

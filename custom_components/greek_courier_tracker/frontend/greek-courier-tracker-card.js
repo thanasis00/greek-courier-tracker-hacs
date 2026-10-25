@@ -507,10 +507,8 @@ class GreekCourierTrackerCard extends HTMLElement {
       }
       this._armedRemove = null;
       try {
-        await this._hass.callService(DOMAIN, "remove_tracking", {
-          tracking_number: id,
-          ...(this._config.entry_id ? { config_entry_id: this._config.entry_id } : {}),
-        });
+        // The integration finds the entry that tracks the number
+        await this._hass.callService(DOMAIN, "remove_tracking", { tracking_number: id });
       } catch (err) {
         this._message(err?.message || String(err), true);
       }
@@ -570,7 +568,6 @@ class GreekCourierTrackerCard extends HTMLElement {
       await this._hass.callService(DOMAIN, "set_owner", {
         tracking_number: select.dataset.id,
         owner: select.value,
-        ...(this._config.entry_id ? { config_entry_id: this._config.entry_id } : {}),
       });
     } catch (err) {
       this._message(err?.message || String(err), true);

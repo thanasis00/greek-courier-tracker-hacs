@@ -267,6 +267,62 @@ class TestActions:
         with pytest.raises(ServiceValidationError):
             await async_remove_tracking(hass, self._call(tracking_number=["Z9"]))
 
+    @pytest.mark.asyncio
+    async def test_remove_tracking_finds_entry(self):
+        """Without config_entry_id each number is removed from the entry that tracks it."""
+        from custom_components.greek_courier_tracker.services import async_remove_tracking
+
+        first = _entry([_item("A1")], entry_id="first")
+        second = _entry([_item("B2"), _item("C3")], entry_id="second")
+        hass = self._hass([first, second])
+
+        await async_remove_tracking(hass, self._call(tracking_number=["b2"]))
+        update = hass.config_entries.async_update_entry
+        assert update.call_count == 1
+        assert update.call_args.args[0] is second
+        assert update.call_args.kwargs["options"]["tracking_numbers"] == [_item("C3")]
+
+        update.reset_mock()
+        await async_remove_tracking(hass, self._call(tracking_number=["A1", "C3"]))
+        changed = {call.args[0].entry_id: call.kwargs["options"]["tracking_numbers"] for call in update.call_args_list}
+        assert changed == {"first": [], "second": [_item("B2")]}
+
+        # Nothing changes when one of the numbers isn't tracked anywhere
+        update.reset_mock()
+        with pytest.raises(ServiceValidationError, match="Z9 is not tracked"):
+            await async_remove_tracking(hass, self._call(tracking_number=["A1", "Z9"]))
+        update.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_remove_tracking_given_entry(self):
+        """With config_entry_id only that entry is searched."""
+        from custom_components.greek_courier_tracker.services import async_remove_tracking
+
+        hass = self._hass([_entry([_item("A1")], entry_id="first"), _entry([_item("B2")], entry_id="second")])
+        with pytest.raises(ServiceValidationError):
+            await async_remove_tracking(hass, self._call(tracking_number=["B2"], config_entry_id="first"))
+        hass.config_entries.async_update_entry.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_set_owner_finds_entry(self):
+        """set_owner changes the number in the entry that tracks it."""
+        from custom_components.greek_courier_tracker.services import async_set_owner
+
+        first = _entry([_item("A1")], entry_id="first")
+        second = _entry([_item("B2")], entry_id="second")
+        hass = self._hass([first, second])
+
+        await async_set_owner(hass, self._call(tracking_number=["B2"], owner="person.maria"))
+        update = hass.config_entries.async_update_entry
+        assert update.call_count == 1
+        assert update.call_args.args[0] is second
+        assert update.call_args.kwargs["options"]["tracking_numbers"] == [_item("B2", owner="u2")]
+
+        update.reset_mock()
+        with pytest.raises(ServiceValidationError):
+            await async_set_owner(hass, self._call(tracking_number=["Z9"], owner="person.maria"))
+        update.assert_not_called()
+
     def test_schemas(self):
         """The courier must be a known code and the number list is normalized."""
         import voluptuous as vol
@@ -521,6 +577,103 @@ class TestConfigFlowUserStep:
         result = await self._flow([]).async_step_user({"tracking_numbers": "", "scan_interval": 1})
         assert result["type"] == "create_entry"
         assert result["data"]["tracking_numbers"] == []
+
+
+class TestMergeEntries:
+    """Entries left over from older versions are merged into the first one."""
+
+    @staticmethod
+    def _entry(entry_id, items, source="user", disabled_by=None, **options):
+        entry = _entry(items, entry_id=entry_id)
+        entry.options = {**entry.options, **options}
+        entry.source = source
+        entry.disabled_by = disabled_by
+        return entry
+
+    @staticmethod
+    def _registry_entry(entry_id, suffix, domain="sensor"):
+        unique_id = f"{entry_id}_{suffix}"
+        return SimpleNamespace(
+            entity_id=f"{domain}.{unique_id.lower()}", domain=domain, unique_id=unique_id, config_entry_id=entry_id,
+        )
+
+    @staticmethod
+    async def _merge(entries, registry_entries=()):
+        from custom_components.greek_courier_tracker import _async_merge_entries
+
+        order = []
+        hass = MagicMock()
+        hass.config_entries.async_entries.return_value = entries
+        hass.config_entries.async_remove = AsyncMock(side_effect=order.append)
+        registry = MagicMock()
+        registry.async_update_entity.side_effect = lambda entity_id, **changes: order.append(entity_id)
+        device_registry = MagicMock()
+        device_registry.async_get_device.return_value = SimpleNamespace(id="device_first")
+
+        with patch("custom_components.greek_courier_tracker.er.async_get", return_value=registry), patch(
+            "custom_components.greek_courier_tracker.er.async_entries_for_config_entry",
+            side_effect=lambda _, entry_id: [item for item in registry_entries if item.config_entry_id == entry_id],
+        ), patch("custom_components.greek_courier_tracker.dr.async_get", return_value=device_registry):
+            await _async_merge_entries(hass)
+
+        device_registry.async_get_device.assert_called_with(identifiers={("greek_courier_tracker", "first")})
+        return hass, registry, order
+
+    @pytest.mark.asyncio
+    async def test_merge(self):
+        """Shipments, settings and sensors move to the first entry; the others are removed."""
+        entries = [
+            self._entry("first", [_item("A1", "Shoes")]),
+            self._entry("second", [_item("B2"), _item("A1")], scan_interval=1, auto_remove_delivered=5),
+            self._entry("third", [_item("C3", owner="u1"), _item("B2")]),
+        ]
+        registry_entries = [
+            self._registry_entry("first", "A1"),
+            self._registry_entry("first", "shipments", "todo"),
+            self._registry_entry("second", "B2"),
+            self._registry_entry("second", "A1"),
+            self._registry_entry("second", "shipments", "todo"),
+            self._registry_entry("third", "C3"),
+            self._registry_entry("third", "B2"),
+            self._registry_entry("third", "shipments", "todo"),
+        ]
+
+        hass, registry, order = await self._merge(entries, registry_entries)
+
+        update = hass.config_entries.async_update_entry
+        update.assert_called_once()
+        assert update.call_args.args[0] is entries[0]
+        assert update.call_args.kwargs["options"] == {
+            "tracking_numbers": [_item("A1", "Shoes"), _item("B2"), _item("C3", owner="u1")],
+            "scan_interval": 2,
+            "auto_remove_delivered": 5,
+        }
+
+        # Only the sensors of moved numbers switch entry (duplicates and to-do lists go with their entry),
+        # and before the entries are removed
+        assert order == ["sensor.second_b2", "sensor.third_c3", "second", "third"]
+        assert registry.async_update_entity.call_args_list[0].kwargs == {
+            "config_entry_id": "first", "device_id": "device_first", "new_unique_id": "first_B2",
+        }
+        assert registry.async_update_entity.call_args_list[1].kwargs["new_unique_id"] == "first_C3"
+
+    @pytest.mark.asyncio
+    async def test_nothing_to_merge(self):
+        """One entry, plus disabled or ignored ones, is left alone."""
+        from custom_components.greek_courier_tracker import _async_merge_entries
+
+        hass = MagicMock()
+        hass.config_entries.async_entries.return_value = [
+            self._entry("first", [_item("A1")]),
+            self._entry("second", [_item("B2")], disabled_by="user"),
+            self._entry("third", [_item("C3")], source="ignore"),
+        ]
+        hass.config_entries.async_remove = AsyncMock()
+
+        await _async_merge_entries(hass)
+
+        hass.config_entries.async_update_entry.assert_not_called()
+        hass.config_entries.async_remove.assert_not_awaited()
 
 
 class TestFrontendCard:

@@ -12,9 +12,10 @@ from typing import Any
 
 import async_timeout
 
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import SOURCE_IGNORE, ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
@@ -25,6 +26,8 @@ from homeassistant.loader import async_get_integration
 from .const import (
     CARD_FILENAME,
     CARD_URL_BASE,
+    CONF_SCAN_INTERVAL,
+    CONF_TRACKING_NUMBERS,
     DOMAIN,
     EVENT_STATUS_CHANGED,
     SIGNAL_TRACKING_ADDED,
@@ -55,9 +58,70 @@ _COORDINATOR_TAKES_ENTRY = "config_entry" in inspect.signature(DataUpdateCoordin
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up the integration actions and the dashboard card."""
     _LOGGER.info("Setting up Greek Courier Tracker integration")
+    try:
+        await _async_merge_entries(hass)
+    except Exception as err:
+        _LOGGER.error("Could not merge the Greek Courier Tracker entries: %s", err, exc_info=True)
     async_setup_services(hass)
     await _async_register_card(hass)
     return True
+
+
+async def _async_merge_entries(hass: HomeAssistant) -> None:
+    """Merge the entries of older versions into the first one.
+
+    Older versions allowed several entries. The shipments and settings of
+    the other entries move to the first one, their sensors too (same entity ID,
+    so the history stays), and the other entries are removed. This runs before
+    the entries are set up.
+    """
+    entries = [
+        entry
+        for entry in hass.config_entries.async_entries(DOMAIN)
+        if entry.source != SOURCE_IGNORE and entry.disabled_by is None
+    ]
+    if len(entries) < 2:
+        return
+
+    first, others = entries[0], entries[1:]
+    _LOGGER.info("Merging %d Greek Courier Tracker entries into %s", len(others), first.entry_id)
+
+    tracking_data = get_tracking_data(first)
+    moved: dict[str, str] = {}  # tracking number -> entry it comes from
+    for entry in others:
+        for item in get_tracking_data(entry):
+            number = item["tracking_number"]
+            if number not in moved and all(old["tracking_number"] != number for old in tracking_data):
+                tracking_data.append(item)
+                moved[number] = entry.entry_id
+
+    # The first entry keeps its settings; the others fill in what it doesn't have
+    options: dict[str, Any] = {}
+    for entry in reversed(entries):
+        options.update(entry.options or {})
+    options[CONF_TRACKING_NUMBERS] = tracking_data
+    options[CONF_SCAN_INTERVAL] = get_scan_interval(first)
+    hass.config_entries.async_update_entry(first, options=options)
+
+    # Removing an entry removes its device and entities, so the sensors of the
+    # moved numbers switch to the first entry and its device first
+    registry = er.async_get(hass)
+    device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, first.entry_id)})
+    for entry in others:
+        prefix = f"{entry.entry_id}_"
+        for registry_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
+            number = registry_entry.unique_id.removeprefix(prefix)
+            if registry_entry.domain != "sensor" or moved.get(number) != entry.entry_id:
+                continue
+            registry.async_update_entity(
+                registry_entry.entity_id,
+                config_entry_id=first.entry_id,
+                device_id=device.id if device else None,
+                new_unique_id=sensor_unique_id(first.entry_id, number),
+            )
+
+    for entry in others:
+        await hass.config_entries.async_remove(entry.entry_id)
 
 
 async def _async_register_card(hass: HomeAssistant) -> None:
