@@ -9,7 +9,10 @@
           "tracking_numbers": "Tracking number (optional)",
           "tracking_name": "Name (optional)",
           "courier": "Courier",
-          "scan_interval": "Scan interval (hours)"
+          "scan_interval_minutes": "Minutes between checks per shipment"
+        },
+        "data_description": {
+          "scan_interval_minutes": "A courier gets one request per interval: with 15 minutes, 1 shipment is checked every 15 minutes, 2 every 30, and so on up to 1 hour. ACS and Geniki check all their shipments together. Minimum 15."
         }
       }
     },
@@ -75,10 +78,11 @@
       "settings": {
         "title": "Settings",
         "data": {
-          "scan_interval": "Scan interval (hours)",
+          "scan_interval_minutes": "Minutes between checks per shipment",
           "auto_remove_delivered": "Remove delivered shipments after (days, 0 = never)"
         },
         "data_description": {
+          "scan_interval_minutes": "A courier gets one request per interval: with 15 minutes, 1 shipment is checked every 15 minutes, 2 every 30, and so on up to 1 hour. ACS and Geniki check all their shipments together. Minimum 15.",
           "auto_remove_delivered": "Delivered shipments are removed this many days after delivery. 0 keeps them."
         }
       }

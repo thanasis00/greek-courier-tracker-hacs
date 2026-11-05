@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
@@ -42,6 +43,15 @@ class TrackingResult:
     status_el: str | None = None  # Greek status text, when the courier provides one
 
 
+# Answers that mean "stop asking for now": rate limited, or refused by a firewall
+_REFUSED = re.compile(r"^HTTP error: (403|429|503)\b")
+
+
+def is_refused(result: TrackingResult) -> bool:
+    """Return whether the courier refused the request instead of answering it."""
+    return not result.success and bool(_REFUSED.match(result.error_message or ""))
+
+
 class BaseCourier(ABC):
     """Base class for courier tracking implementations."""
     
@@ -50,10 +60,20 @@ class BaseCourier(ABC):
     COURIER_NAME: str = ""
     # The courier's own tracking page, with a {tracking_number} placeholder
     TRACKING_PAGE_URL: str = ""
+    # How many numbers fit in one request (more than 1: implement track_many)
+    BATCH_SIZE: int = 1
 
     def __init__(self, session: aiohttp.ClientSession | None = None) -> None:
         """Use the given HTTP session (Home Assistant's shared one), if any."""
         self._session = session
+        self.retry_after: float | None = None
+
+    def _note_refusal(self, response: aiohttp.ClientResponse) -> None:
+        """Remember how long the courier asked us to wait (seconds), if it did."""
+        try:
+            self.retry_after = float(response.headers.get("Retry-After"))
+        except (AttributeError, TypeError, ValueError):
+            self.retry_after = None
 
     @asynccontextmanager
     async def _client_session(self) -> AsyncIterator[aiohttp.ClientSession]:
@@ -75,6 +95,35 @@ class BaseCourier(ABC):
             TrackingResult with shipment status and events
         """
         pass
+
+    async def track_many(self, tracking_numbers: list[str]) -> dict[str, TrackingResult]:
+        """Track up to BATCH_SIZE numbers with one request."""
+        raise NotImplementedError
+
+    def _error_result(self, tracking_number: str, message: str) -> TrackingResult:
+        """Build the result of a failed request."""
+        return TrackingResult(
+            success=False,
+            tracking_number=tracking_number,
+            courier=self.COURIER_CODE,
+            courier_name=self.COURIER_NAME,
+            status="Error",
+            status_category="error",
+            events=[],
+            error_message=message,
+        )
+
+    def _not_found_result(self, tracking_number: str) -> TrackingResult:
+        """Build the result of a number the courier doesn't know."""
+        return TrackingResult(
+            success=True,
+            tracking_number=tracking_number,
+            courier=self.COURIER_CODE,
+            courier_name=self.COURIER_NAME,
+            status="Not Found",
+            status_category="unknown",
+            events=[],
+        )
 
     @classmethod
     def tracking_page_url(cls, tracking_number: str) -> str | None:

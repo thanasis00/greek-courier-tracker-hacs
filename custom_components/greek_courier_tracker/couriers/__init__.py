@@ -3,10 +3,12 @@
 import asyncio
 import logging
 import re
+from collections.abc import Callable, Collection
 
 import aiohttp
 
-from .base import BaseCourier, TrackingResult
+from ..const import REQUEST_SPACING
+from .base import BaseCourier, TrackingResult, is_refused
 from .elta import ELTACourier
 from .acs import ACSCourier
 from .speedex import SpeedExCourier
@@ -27,7 +29,9 @@ __all__ = [
     "CourierCenterCourier",
     "SkroutzCourier",
     "SvuumCourier",
+    "COURIER_REGISTRY",
     "get_courier",
+    "is_refused",
     "tracking_page_url",
     "track_with_auto_detect",
     "_track_with_retry",
@@ -87,7 +91,10 @@ def couriers_by_likelihood(tracking_number: str) -> list[type[BaseCourier]]:
 
 
 async def track_with_auto_detect(
-    tracking_number: str, session: aiohttp.ClientSession | None = None
+    tracking_number: str,
+    session: aiohttp.ClientSession | None = None,
+    skip: Collection[str] = (),
+    on_refused: Callable[[BaseCourier], None] | None = None,
 ) -> TrackingResult:
     """Track a shipment by trying the couriers until one knows the number.
 
@@ -99,6 +106,8 @@ async def track_with_auto_detect(
     Args:
         tracking_number: The tracking number to track
         session: Shared HTTP session to use (e.g. Home Assistant's)
+        skip: Codes of couriers to leave out (they refused requests recently)
+        on_refused: Called with every courier that refuses a request
 
     Returns:
         TrackingResult from the first courier that successfully tracks the package
@@ -114,6 +123,9 @@ async def track_with_auto_detect(
     last_result = None
 
     for courier_class in couriers_by_likelihood(tn):
+        if str(getattr(courier_class.COURIER_CODE, "value", courier_class.COURIER_CODE)) in skip:
+            continue
+
         courier = courier_class(session)
 
         _LOGGER.debug(
@@ -124,6 +136,9 @@ async def track_with_auto_detect(
 
         result = await _track_with_retry(courier, tn)
         last_result = result
+
+        if on_refused is not None and is_refused(result):
+            on_refused(courier)
 
         # If we got a successful result with actual tracking data, return it
         # (an empty "Unknown" result means the courier didn't recognize the number)
@@ -201,8 +216,8 @@ async def _track_with_retry(
                     )
                     return result
 
-            # Retrying a rate limited request only makes it worse
-            if not result.success and (result.error_message or "").startswith("HTTP error: 429"):
+            # Retrying a refused request only makes it worse
+            if is_refused(result):
                 return result
 
             # If we got a clear "Not Found" from the courier, don't retry
@@ -223,7 +238,7 @@ async def _track_with_retry(
                     courier.COURIER_NAME,
                     result.status
                 )
-                await asyncio.sleep(0.5)  # Small delay between retries
+                await asyncio.sleep(REQUEST_SPACING)
             else:
                 _LOGGER.debug(
                     "Final attempt for %s with %s returned: %s",
@@ -243,7 +258,7 @@ async def _track_with_retry(
                 str(err)
             )
             if attempt < max_retries - 1:
-                await asyncio.sleep(0.5)  # Small delay between retries
+                await asyncio.sleep(REQUEST_SPACING)
 
     # All retries exhausted
     return TrackingResult(

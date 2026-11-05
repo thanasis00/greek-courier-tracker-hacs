@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import aiohttp
 import async_timeout
@@ -30,12 +32,17 @@ class BoxNowCourier(BaseCourier):
     # Event type translations
     EVENT_TRANSLATIONS = {
         "new": "New Order",
+        "accepted-to-locker": "Accepted at Locker",
         "in-depot": "In Depot",
+        "in-transit": "In Transit",
         "final-destination": "At Destination Locker",
+        "in-final-destination": "At Destination Locker",
         "delivered": "Delivered",
         "expired": "Expired",
         "returned": "Returned",
     }
+
+    TIMEZONE = ZoneInfo("Europe/Athens")
 
     async def track(self, tracking_number: str) -> TrackingResult:
         """Track a Box Now shipment."""
@@ -58,6 +65,7 @@ class BoxNowCourier(BaseCourier):
                         headers=headers,
                     ) as response:
                         if response.status != 200:
+                            self._note_refusal(response)
                             return TrackingResult(
                                 success=False,
                                 tracking_number=tracking_number,
@@ -115,13 +123,8 @@ class BoxNowCourier(BaseCourier):
         events = []
         
         for event in raw_events:
-            create_time = event.get("createTime", "")
-            # Parse ISO timestamp: "2025-01-15T13:55:32.015Z"
-            date_part = create_time.split("T")[0] if "T" in create_time else create_time
-            time_part = ""
-            if "T" in create_time:
-                time_part = create_time.split("T")[1][:8]  # HH:MM:SS
-            
+            date_part, time_part = self._local_date_time(event.get("createTime", ""))
+
             event_type = event.get("type", "")
             
             events.append(TrackingEvent(
@@ -134,6 +137,8 @@ class BoxNowCourier(BaseCourier):
                 ),
             ))
         
+        # The API returns events oldest first; keep newest first like the other couriers
+        events.sort(key=lambda event: (event.date, event.time or ""), reverse=True)
         latest = events[0] if events else None
         state = parcel.get("state", "")
         status = self.EVENT_TRANSLATIONS.get(state, state)
@@ -141,7 +146,7 @@ class BoxNowCourier(BaseCourier):
         category = "delivered" if state == "delivered" else self.get_status_category(
             status,
             ["delivered"],
-            ["depot", "destination"],
+            ["depot", "destination", "transit", "locker"],
             ["new"]
         )
         
@@ -155,4 +160,22 @@ class BoxNowCourier(BaseCourier):
             events=events,
             latest_event=latest,
             raw_data=data,
+            estimated_delivery=self._estimated_delivery(parcel, state),
         )
+
+    def _local_date_time(self, timestamp: str) -> tuple[str, str]:
+        """Convert an ISO UTC timestamp ("2025-01-15T13:55:32.015Z") to Athens date and time."""
+        try:
+            parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        except ValueError:
+            return timestamp, ""
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(self.TIMEZONE)
+        return parsed.strftime("%Y-%m-%d"), parsed.strftime("%H:%M")
+
+    def _estimated_delivery(self, parcel: dict[str, Any], state: str) -> str | None:
+        """Return the expected day; the time of etaDate (around 04:00) is no real estimate."""
+        if state == "delivered" or not parcel.get("etaDate"):
+            return None
+        date_part, time_part = self._local_date_time(str(parcel["etaDate"]))
+        return date_part if time_part else None

@@ -59,6 +59,7 @@ class ELTACourier(BaseCourier):
                         headers=headers,
                     ) as response:
                         if response.status != 200:
+                            self._note_refusal(response)
                             return TrackingResult(
                                 success=False,
                                 tracking_number=tracking_number,

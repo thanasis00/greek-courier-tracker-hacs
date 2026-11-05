@@ -23,6 +23,7 @@ except ImportError:
 
 from .const import (
     CONF_AUTO_REMOVE_DELIVERED,
+    CONF_LEGACY_SCAN_INTERVAL_HOURS,
     CONF_SCAN_INTERVAL,
     CONF_TRACKING_NUMBERS,
     CONF_TRACKING_NAME,
@@ -32,12 +33,19 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_NAME,
     DOMAIN,
+    MAX_SCAN_INTERVAL,
+    MIN_SCAN_INTERVAL,
     CourierType,
     COURIER_NAMES,
 )
 from .owners import async_owner_options, owner_name, request_user_id
+from .tracking import get_scan_interval
 
 _LOGGER = logging.getLogger(__name__)
+
+SCAN_INTERVAL_VALIDATOR = vol.All(
+    vol.Coerce(int), vol.Range(min=MIN_SCAN_INTERVAL, max=MAX_SCAN_INTERVAL)
+)
 
 # Courier list for dropdown (auto first, then alphabetical)
 COURIER_LIST = [
@@ -199,7 +207,7 @@ class GreekCourierTrackerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Optional(CONF_TRACKING_NUMBERS, default=""): str,
                 vol.Optional(CONF_TRACKING_NAME, default=""): str,
                 vol.Optional(CONF_COURIER, default=CourierType.AUTO): courier_selector,
-                vol.Optional(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): cv.positive_int,
+                vol.Optional(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): SCAN_INTERVAL_VALIDATOR,
             }
         )
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
@@ -344,7 +352,7 @@ class GreekCourierTrackerOptionsFlow(config_entries.OptionsFlow):
 
         auto_remove = self.config_entry.options.get(CONF_AUTO_REMOVE_DELIVERED, DEFAULT_AUTO_REMOVE_DELIVERED)
         schema = vol.Schema({
-            vol.Required(CONF_SCAN_INTERVAL, default=self._scan_interval()): cv.positive_int,
+            vol.Required(CONF_SCAN_INTERVAL, default=self._scan_interval()): SCAN_INTERVAL_VALIDATOR,
             vol.Required(CONF_AUTO_REMOVE_DELIVERED, default=auto_remove): vol.All(
                 vol.Coerce(int), vol.Range(min=0, max=365)
             ),
@@ -353,18 +361,17 @@ class GreekCourierTrackerOptionsFlow(config_entries.OptionsFlow):
 
     def _scan_interval(self) -> int:
         """Return the current scan interval."""
-        return self.config_entry.options.get(
-            CONF_SCAN_INTERVAL,
-            self.config_entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
-        )
+        return get_scan_interval(self.config_entry)
 
     def _options_data(self, scan_interval: int | None = None) -> dict[str, Any]:
         """Build the options to save (other settings are kept)."""
-        return {
+        options = {
             **(self.config_entry.options or {}),
             CONF_TRACKING_NUMBERS: self.migrated_data,
             CONF_SCAN_INTERVAL: scan_interval if scan_interval is not None else self._scan_interval(),
         }
+        options.pop(CONF_LEGACY_SCAN_INTERVAL_HOURS, None)
+        return options
 
     def _tracking_list(self) -> list[dict[str, Any]]:
         """Return the tracked numbers with display names."""

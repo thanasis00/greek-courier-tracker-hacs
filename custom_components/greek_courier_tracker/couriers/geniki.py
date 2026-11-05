@@ -26,6 +26,8 @@ class GenikiCourier(BaseCourier):
     API_URL = "https://taxydromiki.com/external_scripts/track-site.php"
     BASE_URL = "https://taxydromiki.com"
     TRACKING_PAGE_URL = f"{BASE_URL}/track/{{tracking_number}}/"
+    # voucherNo takes numbers separated by commas; the answer has a key for each
+    BATCH_SIZE = 10
 
     # Tracking number patterns
     PATTERNS = [
@@ -116,6 +118,39 @@ class GenikiCourier(BaseCourier):
                 error_message=f"Unexpected error: {err}",
             )
 
+    async def track_many(self, tracking_numbers: list[str]) -> dict[str, TrackingResult]:
+        """Track several Geniki shipments with one request per language."""
+        numbers = [number.strip().upper() for number in tracking_numbers]
+        joined = ",".join(numbers)
+        try:
+            async with self._client_session() as session:
+                status, data = await self._fetch(session, joined, "el")
+                if status != 200:
+                    return {number: self._error_result(number, f"HTTP error: {status}") for number in numbers}
+
+                found = {number: self._get_checkpoints(data, number) for number in numbers}
+
+                # Fetch the English texts too; Greek ones are kept if this fails
+                data_en: Any = None
+                if any(found.values()):
+                    try:
+                        status_en, data_en = await self._fetch(session, joined, "en")
+                        if status_en != 200:
+                            data_en = None
+                    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+                        data_en = None
+        except Exception as err:  # the coordinator falls back to one request per number
+            return {number: self._error_result(number, str(err)) for number in numbers}
+
+        return {
+            number: self._parse_checkpoints(
+                number, checkpoints, self._get_checkpoints(data_en, number), {number: data.get(number)}
+            )
+            if checkpoints
+            else self._not_found_result(number)
+            for number, checkpoints in found.items()
+        }
+
     async def _fetch(
         self, session: aiohttp.ClientSession, tracking_number: str, lang: str
     ) -> tuple[int, Any]:
@@ -126,13 +161,14 @@ class GenikiCourier(BaseCourier):
             # The website sends a JSON body with a form content type
             "Content-Type": "application/x-www-form-urlencoded",
             "Origin": self.BASE_URL,
-            "Referer": f"{self.BASE_URL}/track/{tracking_number}/",
+            "Referer": f"{self.BASE_URL}/track/{tracking_number.split(',')[0]}/",
         }
         body = json.dumps({"lang": lang, "voucherNo": tracking_number})
 
         async with async_timeout.timeout(30):
             async with session.post(self.API_URL, data=body, headers=headers) as response:
                 if response.status != 200:
+                    self._note_refusal(response)
                     return response.status, None
                 return response.status, await response.json(content_type=None)
 

@@ -25,6 +25,10 @@ class ACSCourier(BaseCourier):
     TOKEN_PAGE_URL = f"{BASE_URL}/el/myacs/anafores-apostolwn/anazitisi-apostolwn/"
     TRACKING_PAGE_URL = f"{TOKEN_PAGE_URL}?trackingNumber={{tracking_number}}"
     TOKEN_MAX_AGE = 30 * 60  # seconds
+    # Answers to a missing or expired token; anything else won't improve with a new one
+    TOKEN_ERRORS = {401, 404, 406}
+    # The API takes numbers separated by commas and returns an item for each
+    BATCH_SIZE = 10
 
     # Tracking number patterns (10 digits)
     PATTERNS = [r"^\d{10}$"]
@@ -53,7 +57,7 @@ class ACSCourier(BaseCourier):
             async with self._client_session() as session:
                 async with async_timeout.timeout(30):
                     status, data = await self._search(session, tracking_number)
-                    if status != 200:
+                    if status in self.TOKEN_ERRORS:
                         # The token may have expired: get a new one and retry once
                         status, data = await self._search(session, tracking_number, refresh_token=True)
 
@@ -93,6 +97,32 @@ class ACSCourier(BaseCourier):
                 error_message=f"Unexpected error: {err}",
             )
 
+    async def track_many(self, tracking_numbers: list[str]) -> dict[str, TrackingResult]:
+        """Track several ACS shipments with one request."""
+        numbers = [number.strip() for number in tracking_numbers]
+        joined = ",".join(numbers)
+        try:
+            async with self._client_session() as session:
+                async with async_timeout.timeout(30):
+                    status, data = await self._search(session, joined)
+                    if status in self.TOKEN_ERRORS:
+                        status, data = await self._search(session, joined, refresh_token=True)
+        except Exception as err:  # the coordinator falls back to one request per number
+            return {number: self._error_result(number, str(err)) for number in numbers}
+
+        if status != 200:
+            return {number: self._error_result(number, f"HTTP error: {status}") for number in numbers}
+
+        items = {
+            str(item.get("trackingNumber")): item
+            for item in (data or {}).get("items") or []
+            if isinstance(item, dict)
+        }
+        return {
+            number: self._parse_response(number, {"items": [items[number]] if number in items else []})
+            for number in numbers
+        }
+
     async def _search(
         self, session: aiohttp.ClientSession, tracking_number: str, refresh_token: bool = False
     ) -> tuple[int, Any]:
@@ -113,6 +143,7 @@ class ACSCourier(BaseCourier):
         url = self.API_URL.format(tracking_number=tracking_number)
         async with session.get(url, headers=headers) as response:
             if response.status != 200:
+                self._note_refusal(response)
                 return response.status, None
             return response.status, await response.json(content_type=None)
 
@@ -128,6 +159,7 @@ class ACSCourier(BaseCourier):
         }
         async with session.get(self.TOKEN_PAGE_URL, headers=headers) as response:
             if response.status != 200:
+                self._note_refusal(response)
                 return None
             text = await response.text()
 

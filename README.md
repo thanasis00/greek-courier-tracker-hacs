@@ -41,9 +41,30 @@ Restart Home Assistant.
 1. Settings → Devices & Services → Add Integration
 2. Search "Greek Courier Tracker"
 3. Optionally enter your first tracking number (you can add more any time)
-4. Set the scan interval (default: 1 hour)
+4. Set the minutes between checks per shipment (default and minimum: 15, see [How often couriers are checked](#how-often-couriers-are-checked))
 
 Later, Configure → Settings lets you change the scan interval and remove delivered shipments automatically a number of days after delivery (off by default).
+
+## How often couriers are checked
+
+The couriers publish no rate limits and the integration uses their public tracking pages, so it asks as little as it can:
+
+| Shipments at one courier | Checked every (at 15 minutes) |
+| --- | --- |
+| 1 | 15 minutes |
+| 2 | 30 minutes |
+| 3 | 45 minutes |
+| 4 or more | 1 hour (the longest wait) |
+
+- **ACS and Geniki** answer for up to 10 numbers in one request, so all their shipments are checked together every 15 minutes (each further 10 numbers add one interval).
+- **Each courier has its own schedule**, so many shipments at one courier don't slow down the others. Requests to a courier go out one at a time, a second apart.
+- **Numbers whose courier isn't known yet** are checked at most once an hour, because they may have to ask every courier.
+- **Delivered shipments** are no longer checked (only once after a restart, to show their result).
+- **A courier that refuses a request** (HTTP 403, 429 or 503) is left alone for 30 minutes, doubling up to 6 hours, or longer if it asks for that. Its shipments keep their last status meanwhile.
+
+A shipment is still checked as soon as you add it. `homeassistant.update_entity` follows this schedule too, so it can't check a courier sooner.
+
+No interval guarantees that a courier won't block you. Home Assistant on a VPS or other data center address is more likely to be blocked than on a home connection.
 
 ## Adding Tracking Numbers
 

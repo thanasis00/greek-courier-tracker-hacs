@@ -111,11 +111,11 @@ class TestCoordinator:
             hass=mock_hass,
             tracking_numbers=["SE123456789GR", "BN12345678"],
             tracking_configs=tracking_configs,
-            scan_interval=1,
+            scan_interval=15,
         )
 
         assert coordinator.tracking_numbers == ["SE123456789GR", "BN12345678"]
-        assert coordinator.update_interval == timedelta(hours=1)
+        assert coordinator.update_interval == timedelta(minutes=15)
 
     @pytest.mark.asyncio
     async def test_coordinator_empty_tracking_numbers(self):

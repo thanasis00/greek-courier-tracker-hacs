@@ -254,6 +254,68 @@ class TestBoxNowMockedAPI:
             assert result.status_category == "delivered"
             assert len(result.events) > 0
 
+    @staticmethod
+    async def _track_boxnow(parcel):
+        """Track a number whose API answer has the given parcel."""
+        with patch("aiohttp.ClientSession.post") as mock_post:
+            mock_post.return_value.__aenter__.return_value.status = 200
+            mock_post.return_value.__aenter__.return_value.json = AsyncMock(
+                return_value={"data": [parcel]}
+            )
+            return await BoxNowCourier().track("1234567890")
+
+    async def test_boxnow_latest_event_of_oldest_first_answer(self):
+        """The API lists events oldest first and in UTC."""
+        result = await self._track_boxnow({
+            "state": "in-final-destination",
+            "events": [
+                {"createTime": "2026-10-25T14:09:18.471Z", "type": "new", "locationDisplayName": ""},
+                {"createTime": "2026-11-03T10:32:34.475Z", "type": "in-depot", "locationDisplayName": "Depot"},
+                {"createTime": "2026-11-05T23:08:24.149Z", "type": "final-destination", "locationDisplayName": "Locker"},
+            ],
+        })
+
+        assert [event.status for event in result.events] == ["final-destination", "in-depot", "new"]
+        assert result.latest_event.location == "Locker"
+        # 23:08 UTC is already the next day in Athens
+        assert (result.latest_event.date, result.latest_event.time) == ("2026-11-06", "01:08")
+
+    @pytest.mark.parametrize(
+        ("state", "status", "category"),
+        [
+            ("new", "New Order", "created"),
+            ("accepted-to-locker", "Accepted at Locker", "in_transit"),
+            ("in-depot", "In Depot", "in_transit"),
+            ("in-transit", "In Transit", "in_transit"),
+            ("final-destination", "At Destination Locker", "in_transit"),
+            ("in-final-destination", "At Destination Locker", "in_transit"),
+            ("delivered", "Delivered", "delivered"),
+        ],
+    )
+    async def test_boxnow_states(self, state, status, category):
+        result = await self._track_boxnow({"state": state, "events": []})
+
+        assert result.status == status
+        assert result.status_category == category
+
+    async def test_boxnow_estimated_delivery(self):
+        """etaDate gives the day in Athens; its time isn't a real estimate."""
+        result = await self._track_boxnow(
+            {"state": "in-transit", "etaDate": "2026-11-06T22:30:00.000Z", "events": []}
+        )
+        assert result.estimated_delivery == "2026-11-07"
+
+    @pytest.mark.parametrize(
+        "parcel",
+        [
+            {"state": "in-final-destination", "events": []},
+            {"state": "delivered", "etaDate": "2026-11-07T01:59:00.000Z", "events": []},
+            {"state": "in-transit", "etaDate": "soon", "events": []},
+        ],
+    )
+    async def test_boxnow_no_estimated_delivery(self, parcel):
+        assert (await self._track_boxnow(parcel)).estimated_delivery is None
+
     async def test_boxnow_not_found(self):
         """Test Box Now with tracking number not found."""
         courier = BoxNowCourier()

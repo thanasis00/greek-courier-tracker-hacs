@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -22,20 +23,33 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.const import Platform
 from homeassistant.loader import async_get_integration
+from homeassistant.util import dt as dt_util
 
 from .const import (
+    AUTO_DETECT_TIMEOUT,
     CARD_FILENAME,
     CARD_URL_BASE,
+    CONF_LEGACY_SCAN_INTERVAL_HOURS,
     CONF_SCAN_INTERVAL,
     CONF_TRACKING_NUMBERS,
     DOMAIN,
     EVENT_STATUS_CHANGED,
+    NUMBER_TIMEOUT,
+    REQUEST_SPACING,
     SIGNAL_TRACKING_ADDED,
     SIGNAL_TRACKING_CHANGED,
+    CourierType,
 )
-from .couriers import _track_with_retry, get_courier, track_with_auto_detect
-from .couriers.base import TrackingResult
+from .couriers import (
+    COURIER_REGISTRY,
+    _track_with_retry,
+    get_courier,
+    is_refused,
+    track_with_auto_detect,
+)
+from .couriers.base import BaseCourier, TrackingResult
 from .owners import owner_device_ids, owner_name
+from .scheduling import CourierSchedule, courier_interval
 from .services import async_setup_services
 from .tracking import (
     get_auto_remove_days,
@@ -54,6 +68,9 @@ _LOGGER = logging.getLogger(__name__)
 # Coordinators take their config entry since Home Assistant 2024.11, and newer
 # versions report coordinators that leave it out
 _COORDINATOR_TAKES_ENTRY = "config_entry" in inspect.signature(DataUpdateCoordinator.__init__).parameters
+
+# The schedule of the numbers whose courier isn't known yet
+AUTO_DETECT = CourierType.AUTO.value
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up the integration actions and the dashboard card."""
@@ -101,6 +118,7 @@ async def _async_merge_entries(hass: HomeAssistant) -> None:
         options.update(entry.options or {})
     options[CONF_TRACKING_NUMBERS] = tracking_data
     options[CONF_SCAN_INTERVAL] = get_scan_interval(first)
+    options.pop(CONF_LEGACY_SCAN_INTERVAL_HOURS, None)
     hass.config_entries.async_update_entry(first, options=options)
 
     # Removing an entry removes its device and entities, so the sensors of the
@@ -168,7 +186,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         _LOGGER.info("Tracking numbers: %s", tracking_numbers)
         _LOGGER.info("Tracking configs: %s", tracking_configs)
-        _LOGGER.info("Scan interval: %s hours", scan_interval)
+        _LOGGER.info("Scan interval: %s minutes", scan_interval)
 
         # An empty list is fine: numbers can be added later from the card,
         # the to-do list or the add_tracking action
@@ -268,7 +286,7 @@ class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Tracking
             hass,
             logger=logging.getLogger(__name__),
             name=DOMAIN,
-            update_interval=timedelta(hours=scan_interval),
+            update_interval=timedelta(minutes=scan_interval),
             **({"config_entry": entry} if _COORDINATOR_TAKES_ENTRY else {}),
         )
         self.tracking_numbers = tracking_numbers
@@ -276,6 +294,8 @@ class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Tracking
         self.scan_interval = scan_interval
         self.entry = entry
         self._apply_lock = asyncio.Lock()
+        self._fetch_lock = asyncio.Lock()
+        self._schedule = CourierSchedule()
         self._delivered_since: dict[str, datetime] = {}
         _LOGGER.debug("Coordinator initialized with %d tracking numbers", len(tracking_numbers))
 
@@ -324,9 +344,7 @@ class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Tracking
             self.tracking_numbers = list(new_configs)
             self.tracking_configs = new_configs
 
-            if scan_interval != self.scan_interval:
-                self.scan_interval = scan_interval
-                self.update_interval = timedelta(hours=scan_interval)
+            self.scan_interval = scan_interval
 
             fetched: dict[str, TrackingResult] = {}
             if refetch:
@@ -340,8 +358,9 @@ class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Tracking
                 if number in fetched:
                     data[number] = fetched[number]
 
-            # Notifies the entities and restarts the refresh timer (new interval)
+            # Notifies the entities and restarts the refresh timer (new wake-up time)
             old_data = self.data or {}
+            self._reschedule(data)
             self.async_set_updated_data(data)
             self._after_update(old_data, data)
             return changes
@@ -436,118 +455,209 @@ class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Tracking
                 self.hass, self.entry, remove_tracking_items(get_tracking_data(self.entry), expired)
             )
 
+    def _courier_of(self, number: str, data: dict[str, TrackingResult]) -> str:
+        """Return the courier to ask about a number, or "auto" if it isn't known yet."""
+        config = self.tracking_configs.get(number, {})
+        selected = config.get("courier", CourierType.AUTO) if isinstance(config, dict) else CourierType.AUTO
+        selected = str(getattr(selected, "value", selected))
+        if selected in COURIER_REGISTRY:
+            return selected
+        detected = self._detected_courier(number, data)
+        return detected if detected in COURIER_REGISTRY else AUTO_DETECT
+
+    def _active_numbers(self, data: dict[str, TrackingResult]) -> list[str]:
+        """Return the numbers to keep checking; a delivered shipment is finished.
+
+        Delivered shipments keep their last result (they are asked again only
+        after a restart, to show it). The stop_tracking_delivered option decides
+        what their sensor shows, not whether they are checked.
+        """
+        active = []
+        for number in self.tracking_numbers:
+            current = data.get(number)
+            if current is not None and current.status_category == "delivered":
+                _LOGGER.debug("Not checking %s: already delivered", number)
+                continue
+            active.append(number)
+        return active
+
+    def _intervals(
+        self, numbers: list[str], data: dict[str, TrackingResult]
+    ) -> dict[str, timedelta]:
+        """Return how often each courier with active numbers should be asked."""
+        counts = Counter(self._courier_of(number, data) for number in numbers)
+        return {
+            courier: courier_interval(
+                courier,
+                count,
+                self.scan_interval,
+                COURIER_REGISTRY[courier].BATCH_SIZE if courier in COURIER_REGISTRY else 1,
+            )
+            for courier, count in counts.items()
+        }
+
+    def _reschedule(self, data: dict[str, TrackingResult]) -> None:
+        """Wake up when the next courier is due."""
+        now = dt_util.utcnow()
+        intervals = self._intervals(self._active_numbers(data), data)
+        self._schedule.reconcile(intervals, now)
+        self.update_interval = self._schedule.next_wake(
+            list(intervals), now, timedelta(minutes=self.scan_interval)
+        )
+
     async def _async_update_data(self) -> dict[str, TrackingResult]:
-        """Fetch latest data for all tracking numbers."""
+        """Fetch the latest data of the couriers that are due."""
         if not self.tracking_numbers:
             _LOGGER.warning("No tracking numbers to track")
             return {}
 
-        _LOGGER.debug("Fetching updates for %d tracking numbers", len(self.tracking_numbers))
+        now = dt_util.utcnow()
+        data = self._current_data()
+        active = self._active_numbers(data)
+        intervals = self._intervals(active, data)
+        due = {courier for courier in intervals if self._schedule.is_due(courier, now)}
+        numbers = [number for number in active if self._courier_of(number, data) in due]
+        _LOGGER.debug("Checking %d of %d numbers (couriers: %s)", len(numbers), len(active), sorted(due))
 
-        # Filter out tracking numbers that should be stopped (delivered and stop_tracking_delivered is True)
-        active_numbers = []
-        for number in self.tracking_numbers:
-            config = self.tracking_configs.get(number, {})
-            stop_when_delivered = config.get("stop_tracking_delivered", False) if isinstance(config, dict) else False
+        new_data = data
+        if numbers:
+            new_data = await self._async_fetch(numbers, data)
+            finished = dt_util.utcnow()
+            for courier in due:
+                self._schedule.mark_polled(courier, intervals[courier], finished)
 
-            # Check current status
-            current_result = self.data.get(number) if self.data else None
-
-            # Skip tracking if stop_tracking_delivered is True and already delivered
-            if stop_when_delivered and current_result and current_result.status_category == "delivered":
-                _LOGGER.debug("Skipping tracking for %s (delivered and stop_tracking_delivered is True)", number)
-                # Keep the old result
-                continue
-
-            active_numbers.append(number)
-
-        if not active_numbers:
-            _LOGGER.debug("No active tracking numbers to update")
-            return self._current_data()
-
-        new_data = await self._async_fetch(active_numbers, self._current_data())
         self._after_update(self.data or {}, new_data)
+        self._reschedule(new_data)
         return new_data
+
+    def _record_refusal(self, code: str, courier: BaseCourier) -> None:
+        """Leave a courier alone for a while after it refused a request."""
+        delay = self._schedule.record_blocked(code, dt_util.utcnow(), courier.retry_after)
+        _LOGGER.warning("%s refused a request, not asking it again for %s", courier.COURIER_NAME, delay)
+
+    async def _track_one(self, courier: BaseCourier, number: str) -> TrackingResult | None:
+        """Ask a courier about one number; None keeps the previous data."""
+        try:
+            async with async_timeout.timeout(NUMBER_TIMEOUT):
+                return await _track_with_retry(courier, number)
+        except Exception as err:
+            _LOGGER.error("Error tracking %s with %s: %s", number, courier.COURIER_NAME, err, exc_info=True)
+            return None
+
+    async def _track_batch(
+        self, courier: BaseCourier, numbers: list[str], data: dict[str, TrackingResult]
+    ) -> tuple[dict[str, TrackingResult], list[str]]:
+        """Ask a courier about several numbers; also return those to ask one by one."""
+        results: dict[str, TrackingResult] = {}
+        for start in range(0, len(numbers), courier.BATCH_SIZE):
+            if start:
+                await asyncio.sleep(REQUEST_SPACING)
+            try:
+                async with async_timeout.timeout(NUMBER_TIMEOUT):
+                    results.update(await courier.track_many(numbers[start : start + courier.BATCH_SIZE]))
+            except Exception as err:
+                _LOGGER.warning("%s could not answer for several numbers: %s", courier.COURIER_NAME, err)
+            if any(is_refused(result) for result in results.values()):
+                return results, []
+
+        # A failed batch, or a number it lost, shouldn't leave a shipment stale
+        retry = [
+            number
+            for number in numbers
+            if number not in results
+            or not results[number].success
+            or (results[number].status == "Not Found" and self._detected_courier(number, data))
+        ]
+        return results, retry
+
+    async def _fetch_courier(
+        self,
+        code: str,
+        numbers: list[str],
+        data: dict[str, TrackingResult],
+        session: Any,
+        results: dict[str, TrackingResult],
+    ) -> None:
+        """Ask one courier about its numbers, one request at a time."""
+        if self._schedule.is_blocked(code, dt_util.utcnow()):
+            _LOGGER.debug("Leaving %s alone for now, keeping the data of %s", code, numbers)
+            return
+
+        courier = get_courier(code, session)
+        pending = numbers
+        spaced = False
+        if courier.BATCH_SIZE > 1 and len(numbers) > 1:
+            batch, pending = await self._track_batch(courier, numbers, data)
+            results.update(batch)
+            spaced = True
+            if any(is_refused(result) for result in batch.values()):
+                self._record_refusal(code, courier)
+                return
+            if len(pending) < len(numbers):
+                self._schedule.record_success(code)
+
+        for number in pending:
+            if spaced:
+                await asyncio.sleep(REQUEST_SPACING)
+            spaced = True
+            result = await self._track_one(courier, number)
+            if result is None:
+                continue
+            results[number] = result
+            if is_refused(result):
+                self._record_refusal(code, courier)
+                return
+            if result.success:
+                self._schedule.record_success(code)
+
+    async def _detect_one(self, number: str, session: Any) -> TrackingResult | None:
+        """Try all couriers that aren't backing off for a number of unknown courier."""
+        now = dt_util.utcnow()
+        skip = {code for code in COURIER_REGISTRY if self._schedule.is_blocked(code, now)}
+        refused = lambda courier: self._record_refusal(  # noqa: E731
+            str(getattr(courier.COURIER_CODE, "value", courier.COURIER_CODE)), courier
+        )
+        try:
+            async with async_timeout.timeout(AUTO_DETECT_TIMEOUT):
+                return await track_with_auto_detect(number, session, skip=skip, on_refused=refused)
+        except Exception as err:
+            _LOGGER.error("Error detecting the courier of %s: %s", number, err, exc_info=True)
+            return None
 
     async def _async_fetch(
         self, numbers: list[str], base_data: dict[str, TrackingResult]
     ) -> dict[str, TrackingResult]:
-        """Track the given numbers and merge the results into base_data."""
-        active_numbers = numbers
+        """Track the given numbers and merge the results into base_data.
 
-        session = async_get_clientsession(self.hass)
+        Couriers are asked at the same time, each one a request at a time. Numbers
+        of unknown courier come last, as they may ask every courier.
+        """
+        groups: dict[str, list[str]] = {}
+        for number in numbers:
+            groups.setdefault(self._courier_of(number, base_data), []).append(number)
+        unknown = groups.pop(AUTO_DETECT, [])
 
-        async def _track_one(number: str) -> TrackingResult:
-            _LOGGER.debug("Tracking: %s", number)
-            try:
-                # Get courier selection from config
-                config = self.tracking_configs.get(number, {})
-                selected_courier = config.get("courier", "auto") if isinstance(config, dict) else "auto"
-
-                if selected_courier and selected_courier != "auto":
-                    # Use the selected courier
-                    courier = get_courier(selected_courier, session)
-                    if courier:
-                        _LOGGER.debug("Using selected courier %s for %s", courier.COURIER_NAME, number)
-                        result = await _track_with_retry(courier, number)
-                    else:
-                        _LOGGER.warning("Selected courier %s not found, falling back to auto-detect", selected_courier)
-                        result = await track_with_auto_detect(number, session)
-                else:
-                    # Ask the courier that found it last time before trying them all
-                    result = None
-                    detected = self._detected_courier(number, base_data)
-                    if detected:
-                        courier = get_courier(detected, session)
-                        if courier:
-                            _LOGGER.debug("Using detected courier %s for %s", courier.COURIER_NAME, number)
-                            result = await _track_with_retry(courier, number)
-                            if not result.success or result.status in ["Not Found", "Error"]:
-                                result = None
-                    if result is None:
-                        result = await track_with_auto_detect(number, session)
-
-                _LOGGER.debug("Result for %s: success=%s, courier=%s, status=%s",
-                           number, result.success, result.courier, result.status)
-                return result
-            except Exception as err:
-                _LOGGER.error("Error tracking %s: %s", number, err, exc_info=True)
-                # Return None to indicate failure - we'll keep the old data
-                return None
-
-        results: list[TrackingResult | Exception | None]
-        try:
-            async with async_timeout.timeout(60):
-                results = await asyncio.gather(
-                    *[_track_one(number) for number in active_numbers],
-                    return_exceptions=True,
-                )
-        except asyncio.TimeoutError:
-            _LOGGER.error("Timeout while fetching tracking updates")
-            # Keep existing data on timeout
-            return base_data
+        results: dict[str, TrackingResult] = {}
+        async with self._fetch_lock:
+            session = async_get_clientsession(self.hass)
+            await asyncio.gather(*[
+                self._fetch_courier(code, group, base_data, session, results)
+                for code, group in groups.items()
+            ])
+            for index, number in enumerate(unknown):
+                if index:
+                    await asyncio.sleep(REQUEST_SPACING)
+                result = await self._detect_one(number, session)
+                if result is not None:
+                    results[number] = result
 
         # Merge results with existing data (keep stopped tracking numbers)
         new_data = dict(base_data)
-        for number, result in zip(active_numbers, results):
-            if isinstance(result, Exception):
-                _LOGGER.error("Exception for %s: %s", number, result)
-                # Keep existing data for this tracking number
-                if number not in new_data:
-                    # Only create error result if we don't have any data yet
-                    new_data[number] = TrackingResult(
-                        success=False,
-                        tracking_number=number,
-                        courier="unknown",
-                        courier_name="Unknown Courier",
-                        status="No data available",
-                        status_category="unknown",
-                        events=[],
-                        error_message=str(result),
-                    )
-            elif result is None:
-                # API call failed - keep existing data
-                _LOGGER.warning("API call failed for %s, keeping previous data", number)
+        for number in numbers:
+            result = results.get(number)
+            if result is None:
+                # API call failed or skipped - keep existing data
+                _LOGGER.debug("No answer for %s, keeping previous data", number)
             elif not result.success or result.status in ["Error", "Not Found"]:
                 # API returned error or not found - keep existing data if we have it
                 if number in new_data:
@@ -557,7 +667,6 @@ class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Tracking
                     new_data[number] = result
             else:
                 # Success - update with new data and add timestamp
-                from datetime import datetime, timezone
                 result.last_updated = datetime.now(timezone.utc).isoformat()
                 new_data[number] = result
 

@@ -7,7 +7,8 @@ DOMAIN: Final = "greek_courier_tracker"
 
 # Configuration keys
 CONF_TRACKING_NUMBERS: Final = "tracking_numbers"
-CONF_SCAN_INTERVAL: Final = "scan_interval"
+CONF_SCAN_INTERVAL: Final = "scan_interval_minutes"
+CONF_LEGACY_SCAN_INTERVAL_HOURS: Final = "scan_interval"  # Older versions: whole hours
 CONF_NAME: Final = "name"
 CONF_COURIER: Final = "courier"
 CONF_TRACKING_NAME: Final = "tracking_name"  # Custom name for a tracking number
@@ -15,9 +16,22 @@ CONF_AUTO_REMOVE_DELIVERED: Final = "auto_remove_delivered"  # Days after delive
 CONF_STOP_TRACKING_DELIVERED: Final = "stop_tracking_delivered"  # Stop tracking delivered packages
 
 # Default values
-DEFAULT_SCAN_INTERVAL: Final = 1  # hours
+DEFAULT_SCAN_INTERVAL: Final = 15  # minutes per request to a courier
+MIN_SCAN_INTERVAL: Final = 15  # minutes
+MAX_SCAN_INTERVAL: Final = 1440  # minutes
 DEFAULT_NAME: Final = "Greek Courier Tracker"
 DEFAULT_AUTO_REMOVE_DELIVERED: Final = 0  # days after delivery, 0 = keep
+
+# Polling of the couriers (see scheduling.py)
+MAX_COURIER_INTERVAL: Final = 60  # minutes, however many shipments a courier has
+AUTO_DETECT_MIN_INTERVAL: Final = 60  # minutes, numbers whose courier isn't known yet
+REQUEST_SPACING: Final = 1.0  # seconds between requests to the same courier
+POLL_JITTER: Final = 0.1  # up to this share is added to every cycle
+MIN_WAKE_SECONDS: Final = 60
+BACKOFF_BASE_MINUTES: Final = 30  # after a refused request, doubles every time
+BACKOFF_MAX_MINUTES: Final = 360
+NUMBER_TIMEOUT: Final = 60  # seconds for one number (retries included)
+AUTO_DETECT_TIMEOUT: Final = 180  # seconds for one number tried at all couriers
 
 # Fired when the status of a tracked shipment changes
 EVENT_STATUS_CHANGED: Final = "greek_courier_tracker_status_changed"

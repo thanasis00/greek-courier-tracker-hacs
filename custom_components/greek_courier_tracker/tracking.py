@@ -10,10 +10,13 @@ from homeassistant.core import HomeAssistant
 
 from .const import (
     CONF_AUTO_REMOVE_DELIVERED,
+    CONF_LEGACY_SCAN_INTERVAL_HOURS,
     CONF_SCAN_INTERVAL,
     CONF_TRACKING_NUMBERS,
     DEFAULT_AUTO_REMOVE_DELIVERED,
     DEFAULT_SCAN_INTERVAL,
+    MAX_SCAN_INTERVAL,
+    MIN_SCAN_INTERVAL,
     CourierType,
 )
 from .couriers.base import TrackingResult
@@ -33,6 +36,7 @@ STATUS_TEXT_EL = {
     "New Order": "Νέα παραγγελία",
     "In Depot": "Στην αποθήκη",
     "At Destination Locker": "Στο locker προορισμού",
+    "Accepted at Locker": "Παραλήφθηκε στο locker",
     "Expired": "Έληξε",
     "Returned": "Επιστράφηκε",
     "New Shipment": "Νέα αποστολή",
@@ -114,19 +118,36 @@ def status_text(result: TrackingResult, language: str | None, stopped: bool = Fa
 
 
 def get_scan_interval(entry: ConfigEntry) -> int:
-    """Return the scan interval of an entry (options first, then data)."""
-    if entry.options and CONF_SCAN_INTERVAL in entry.options:
-        return int(entry.options[CONF_SCAN_INTERVAL])
-    return int(entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL))
+    """Return the scan interval of an entry in minutes (options first, then data).
+
+    Older versions stored whole hours. One hour was their default and their
+    shortest choice, so it becomes the new default; longer ones are kept.
+    """
+    sources = (entry.options or {}, entry.data)
+    for source in sources:
+        if CONF_SCAN_INTERVAL in source:
+            return _limit_scan_interval(int(source[CONF_SCAN_INTERVAL]))
+    for source in sources:
+        if CONF_LEGACY_SCAN_INTERVAL_HOURS in source:
+            hours = int(source[CONF_LEGACY_SCAN_INTERVAL_HOURS])
+            return _limit_scan_interval(hours * 60) if hours > 1 else DEFAULT_SCAN_INTERVAL
+    return DEFAULT_SCAN_INTERVAL
+
+
+def _limit_scan_interval(minutes: int) -> int:
+    """Keep a stored scan interval within the allowed range."""
+    return min(max(minutes, MIN_SCAN_INTERVAL), MAX_SCAN_INTERVAL)
 
 
 def build_options(entry: ConfigEntry, tracking_data: list[dict[str, Any]]) -> dict[str, Any]:
     """Build the entry options for a new list of tracking items (other settings are kept)."""
-    return {
+    options = {
         **(entry.options or {}),
         CONF_TRACKING_NUMBERS: tracking_data,
         CONF_SCAN_INTERVAL: get_scan_interval(entry),
     }
+    options.pop(CONF_LEGACY_SCAN_INTERVAL_HOURS, None)
+    return options
 
 
 def add_tracking_item(

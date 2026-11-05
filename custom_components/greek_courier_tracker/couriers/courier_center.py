@@ -78,6 +78,7 @@ class CourierCenterCourier(BaseCourier):
         async with async_timeout.timeout(30):
             async with session.get(self.TRACKING_URL, params={"tracknr": number}, headers=headers) as response:
                 if response.status != 200:
+                    self._note_refusal(response)
                     return response.status, ""
                 html = await response.text()
         # Remove UTF-8 BOM if present

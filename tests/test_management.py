@@ -26,12 +26,12 @@ from custom_components.greek_courier_tracker.tracking import (
 COMPONENT_DIR = Path(__file__).parent.parent / "custom_components" / "greek_courier_tracker"
 
 
-def _entry(tracking_numbers=None, scan_interval=2, entry_id="entry_1"):
+def _entry(tracking_numbers=None, scan_interval=30, entry_id="entry_1"):
     entry = MagicMock()
     entry.entry_id = entry_id
     entry.domain = "greek_courier_tracker"
     entry.title = "Greek Courier Tracker"
-    entry.options = {"tracking_numbers": tracking_numbers or [], "scan_interval": scan_interval}
+    entry.options = {"tracking_numbers": tracking_numbers or [], "scan_interval_minutes": scan_interval}
     entry.data = {}
     return entry
 
@@ -149,7 +149,7 @@ class TestTrackingHelpers:
 
     def test_build_options_keeps_scan_interval(self):
         """Saving a new list keeps the scan interval."""
-        assert build_options(_entry(scan_interval=5), []) == {"tracking_numbers": [], "scan_interval": 5}
+        assert build_options(_entry(scan_interval=45), []) == {"tracking_numbers": [], "scan_interval_minutes": 45}
 
 
 class TestActions:
@@ -180,7 +180,7 @@ class TestActions:
 
         options = hass.config_entries.async_update_entry.call_args.kwargs["options"]
         assert options["tracking_numbers"] == [_item("A1"), _item("1234567", "Shoes", "svuum")]
-        assert options["scan_interval"] == 2
+        assert options["scan_interval_minutes"] == 30
 
     @pytest.mark.asyncio
     async def test_add_tracking_owner(self):
@@ -533,10 +533,10 @@ class TestOptionsMenu:
         """The scan interval is saved together with the numbers."""
         flow = self._flow([_item("A1")])
 
-        result = await flow.async_step_settings({"scan_interval": 6, "auto_remove_delivered": 14})
+        result = await flow.async_step_settings({"scan_interval_minutes": 60, "auto_remove_delivered": 14})
         assert result["type"] == "create_entry"
         assert result["data"] == {
-            "tracking_numbers": [_item("A1")], "scan_interval": 6, "auto_remove_delivered": 14,
+            "tracking_numbers": [_item("A1")], "scan_interval_minutes": 60, "auto_remove_delivered": 14,
         }
 
     @pytest.mark.asyncio
@@ -574,7 +574,7 @@ class TestConfigFlowUserStep:
     @pytest.mark.asyncio
     async def test_first_number_is_optional(self):
         """The integration can be set up without a tracking number."""
-        result = await self._flow([]).async_step_user({"tracking_numbers": "", "scan_interval": 1})
+        result = await self._flow([]).async_step_user({"tracking_numbers": "", "scan_interval_minutes": 15})
         assert result["type"] == "create_entry"
         assert result["data"]["tracking_numbers"] == []
 
@@ -645,7 +645,7 @@ class TestMergeEntries:
         assert update.call_args.args[0] is entries[0]
         assert update.call_args.kwargs["options"] == {
             "tracking_numbers": [_item("A1", "Shoes"), _item("B2"), _item("C3", owner="u1")],
-            "scan_interval": 2,
+            "scan_interval_minutes": 30,
             "auto_remove_delivered": 5,
         }
 
@@ -813,9 +813,10 @@ class TestInPlaceUpdates:
 
         coordinator = self._coordinator([_item("A1")], {"A1": _result("A1")})
 
-        await coordinator.async_apply_tracking_data([_item("A1")], 6)
+        await coordinator.async_apply_tracking_data([_item("A1")], 360)
 
-        assert coordinator.update_interval == timedelta(hours=6)
+        assert coordinator.scan_interval == 360
+        assert timedelta(hours=6) <= coordinator.update_interval <= timedelta(hours=7)
         coordinator._async_fetch.assert_not_awaited()
         coordinator.async_set_updated_data.assert_called_once()
 
@@ -842,7 +843,7 @@ class TestInPlaceUpdates:
         ) as send:
             await _async_update_listener(hass, entry)
 
-        coordinator.async_apply_tracking_data.assert_awaited_once_with(get_tracking_data(entry), 2)
+        coordinator.async_apply_tracking_data.assert_awaited_once_with(get_tracking_data(entry), 30)
         registry.async_get_entity_id.assert_called_once_with("sensor", "greek_courier_tracker", "entry_1_B2")
         registry.async_remove.assert_called_once_with("sensor.greek_courier_tracker_b2")
         signals = {call.args[1]: call.args[2] for call in send.call_args_list}
