@@ -74,6 +74,36 @@ class TestELTAMockedAPI:
             assert len(result.events) > 0
             assert result.latest_event is not None
 
+    @pytest.mark.parametrize(
+        ("statuses", "expected"),
+        [
+            (["Σε διανομέα προς παράδοση", "Αποστολή βρίσκεται σε στάδιο μεταφοράς"], "in_transit"),
+            (["Απουσία παραλήπτη - Επικοινωνία με το κατάστημα"], "in_transit"),
+            (["Αποστολή βρίσκεται στο κατάστημα-Δυνατότητα παραλαβής"], "in_transit"),
+            (["Άφιξη σε", "Παραλαβή αποστολής"], "in_transit"),
+            (["Κάτι καινούριο", "Παραλαβή αποστολής"], "in_transit"),
+            (["Κάτι καινούριο"], "created"),
+        ],
+    )
+    async def test_elta_delivery_network_statuses(self, statuses, expected):
+        """ELTA's last-mile phrases must not reset the progress bar to unknown."""
+        import json
+
+        courier = ELTACourier()
+        events = [
+            {"date": "09-11-2026", "time": "05:38", "place": "ΜΔΤ ΑΘΗΝΑΣ - ΔΙΑΝΟΜΗ", "status": s}
+            for s in statuses
+        ]
+        body = json.dumps({"status": 1, "result": {"PW268817420GR": {"status": 1, "result": events}}})
+
+        with patch("aiohttp.ClientSession.post") as mock_post:
+            mock_post.return_value.__aenter__.return_value.status = 200
+            mock_post.return_value.__aenter__.return_value.text = AsyncMock(return_value=body)
+
+            result = await courier.track("PW268817420GR")
+
+        assert result.status_category == expected
+
     async def test_elta_not_found(self):
         """Test ELTA with tracking number not found."""
         courier = ELTACourier()

@@ -142,9 +142,16 @@ class ELTACourier(BaseCourier):
             category = self.get_status_category(
                 status,
                 ["παραδόθηκε", "delivered"],
-                ["μεταφοράς", "transit"],
+                # "Σε διανομέα προς παράδοση", "Άφιξη σε", "...στο κατάστημα",
+                # "Απουσία παραλήπτη" all mean the parcel is on its way.
+                ["μεταφοράς", "transit", "διανομ", "άφιξη", "κατάστημα",
+                 "απουσία", "παραλαβή αποστολής", "picked up"],
                 ["δημιουργία", "created", "συ.δε.τα."]
             )
+            # ELTA has more phrases than we know; once the parcel has more
+            # than one scan it has left the sender, so never fall back to 0.
+            if category == "unknown" and events:
+                category = "in_transit" if len(events) > 1 else "created"
             
             return TrackingResult(
                 success=True,
