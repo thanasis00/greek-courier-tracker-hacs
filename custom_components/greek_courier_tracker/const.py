@@ -14,6 +14,8 @@ CONF_COURIER: Final = "courier"
 CONF_TRACKING_NAME: Final = "tracking_name"  # Custom name for a tracking number
 CONF_AUTO_REMOVE_DELIVERED: Final = "auto_remove_delivered"  # Days after delivery to remove a shipment
 CONF_STOP_TRACKING_DELIVERED: Final = "stop_tracking_delivered"  # Stop tracking delivered packages
+CONF_KEEP_HISTORY: Final = "keep_history"  # Keep removed shipments as frozen history (shipment_history.py)
+CONF_HISTORY_DAYS: Final = "history_days"  # Days a removed shipment stays in the history
 
 # Default values
 DEFAULT_SCAN_INTERVAL: Final = 15  # minutes per request to a courier
@@ -21,6 +23,9 @@ MIN_SCAN_INTERVAL: Final = 15  # minutes
 MAX_SCAN_INTERVAL: Final = 1440  # minutes
 DEFAULT_NAME: Final = "Greek Courier Tracker"
 DEFAULT_AUTO_REMOVE_DELIVERED: Final = 0  # days after delivery, 0 = keep
+DEFAULT_KEEP_HISTORY: Final = False  # removing a shipment deletes it, as in older versions
+DEFAULT_HISTORY_DAYS: Final = 0  # days in the history, 0 = forever
+MAX_HISTORY_DAYS: Final = 3650
 
 # Polling of the couriers (see scheduling.py)
 MAX_COURIER_INTERVAL: Final = 60  # minutes, however many shipments a courier has
@@ -39,6 +44,9 @@ EVENT_STATUS_CHANGED: Final = "greek_courier_tracker_status_changed"
 # Dispatcher signals for tracking numbers added/changed without a reload
 SIGNAL_TRACKING_ADDED: Final = "greek_courier_tracker_tracking_added_{entry_id}"
 SIGNAL_TRACKING_CHANGED: Final = "greek_courier_tracker_tracking_changed_{entry_id}"
+
+# Dispatcher signal: the history of removed shipments changed (any entry)
+SIGNAL_HISTORY_UPDATED: Final = "greek_courier_tracker_history_updated"
 
 # Bundled dashboard card
 CARD_URL_BASE: Final = "/greek_courier_tracker"

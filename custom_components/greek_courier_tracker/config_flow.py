@@ -23,6 +23,8 @@ except ImportError:
 
 from .const import (
     CONF_AUTO_REMOVE_DELIVERED,
+    CONF_HISTORY_DAYS,
+    CONF_KEEP_HISTORY,
     CONF_LEGACY_SCAN_INTERVAL_HOURS,
     CONF_SCAN_INTERVAL,
     CONF_TRACKING_NUMBERS,
@@ -30,9 +32,12 @@ from .const import (
     CONF_STOP_TRACKING_DELIVERED,
     CONF_COURIER,
     DEFAULT_AUTO_REMOVE_DELIVERED,
+    DEFAULT_HISTORY_DAYS,
+    DEFAULT_KEEP_HISTORY,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_NAME,
     DOMAIN,
+    MAX_HISTORY_DAYS,
     MAX_SCAN_INTERVAL,
     MIN_SCAN_INTERVAL,
     CourierType,
@@ -344,17 +349,26 @@ class GreekCourierTrackerOptionsFlow(config_entries.OptionsFlow):
         return self.async_show_form(step_id="delete_select", data_schema=schema)
 
     async def async_step_settings(self, user_input: dict[str, Any] | None = None):
-        """Change the scan interval and the clean-up of delivered shipments."""
+        """Change the scan interval, the clean-up of deliveries and the history."""
         if user_input is not None:
             data = self._options_data(scan_interval=user_input[CONF_SCAN_INTERVAL])
             data[CONF_AUTO_REMOVE_DELIVERED] = user_input.get(CONF_AUTO_REMOVE_DELIVERED, 0)
+            for key in (CONF_KEEP_HISTORY, CONF_HISTORY_DAYS):
+                if key in user_input:
+                    data[key] = user_input[key]
             return self.async_create_entry(title="", data=data)
 
-        auto_remove = self.config_entry.options.get(CONF_AUTO_REMOVE_DELIVERED, DEFAULT_AUTO_REMOVE_DELIVERED)
+        options = self.config_entry.options or {}
+        auto_remove = options.get(CONF_AUTO_REMOVE_DELIVERED, DEFAULT_AUTO_REMOVE_DELIVERED)
         schema = vol.Schema({
             vol.Required(CONF_SCAN_INTERVAL, default=self._scan_interval()): SCAN_INTERVAL_VALIDATOR,
             vol.Required(CONF_AUTO_REMOVE_DELIVERED, default=auto_remove): vol.All(
                 vol.Coerce(int), vol.Range(min=0, max=365)
+            ),
+            # Removed shipments stay, frozen, in the card's history (shipment_history.py)
+            vol.Required(CONF_KEEP_HISTORY, default=options.get(CONF_KEEP_HISTORY, DEFAULT_KEEP_HISTORY)): bool,
+            vol.Required(CONF_HISTORY_DAYS, default=options.get(CONF_HISTORY_DAYS, DEFAULT_HISTORY_DAYS)): vol.All(
+                vol.Coerce(int), vol.Range(min=0, max=MAX_HISTORY_DAYS)
             ),
         })
         return self.async_show_form(step_id="settings", data_schema=schema)

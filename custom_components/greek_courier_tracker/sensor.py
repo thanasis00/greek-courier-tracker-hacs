@@ -13,8 +13,8 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, SIGNAL_TRACKING_ADDED, SIGNAL_TRACKING_CHANGED
-from .couriers import tracking_page_url
-from .couriers.base import TrackingEvent, TrackingResult
+from .couriers.base import TrackingResult
+from .shipment_history import serialize_events, tracking_url
 from .owners import owner_name
 from .tracking import get_tracking_data, sensor_unique_id, status_text
 from . import GreekCourierDataUpdateCoordinator
@@ -150,7 +150,7 @@ class GreekCourierTrackingSensor(CoordinatorEntity, SensorEntity):
             "owner": owner_name(self.hass, self._owner) if self.hass else None,
             "courier": result.courier,
             "courier_name": result.courier_name,
-            "tracking_url": _tracking_url(result),
+            "tracking_url": tracking_url(result),
             "status": result.status,
             "status_el": status_text(result, "el"),
             "status_category": result.status_category,
@@ -158,7 +158,7 @@ class GreekCourierTrackingSensor(CoordinatorEntity, SensorEntity):
             "latest_date": latest.date if latest else None,
             "latest_time": latest.time if latest else None,
             "latest_place": latest.location if latest else None,
-            "events": _serialize_events(result.events),
+            "events": serialize_events(result.events),
             "delivered": result.status_category == "delivered",
             "stop_tracking_delivered": self._stop_tracking_delivered,
             "tracking_stopped": self._stop_tracking_delivered and result.status_category == "delivered",
@@ -184,25 +184,3 @@ class GreekCourierTrackingSensor(CoordinatorEntity, SensorEntity):
     def _get_result(self) -> TrackingResult | None:
         data = self.coordinator.data or {}
         return data.get(self._tracking_number)
-
-
-def _tracking_url(result: TrackingResult) -> str | None:
-    """Return the courier's own tracking page, once a courier has found the shipment."""
-    if not result.success or result.status in ("Not Found", "Error"):
-        return None
-    courier = str(getattr(result.courier, "value", result.courier))
-    return tracking_page_url(courier, result.tracking_number)
-
-
-def _serialize_events(events: list[TrackingEvent]) -> list[dict[str, Any]]:
-    """Serialize TrackingEvent objects to dictionaries."""
-    return [
-        {
-            "date": event.date,
-            "time": event.time,
-            "location": event.location,
-            "status": event.status,
-            "status_translated": event.status_translated,
-        }
-        for event in events
-    ]

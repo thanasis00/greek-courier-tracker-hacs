@@ -14,12 +14,13 @@ from typing import Any
 import async_timeout
 
 from homeassistant.config_entries import SOURCE_IGNORE, ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.const import Platform
 from homeassistant.loader import async_get_integration
@@ -36,6 +37,7 @@ from .const import (
     EVENT_STATUS_CHANGED,
     NUMBER_TIMEOUT,
     REQUEST_SPACING,
+    SIGNAL_HISTORY_UPDATED,
     SIGNAL_TRACKING_ADDED,
     SIGNAL_TRACKING_CHANGED,
     CourierType,
@@ -48,6 +50,14 @@ from .couriers import (
     track_with_auto_detect,
 )
 from .couriers.base import BaseCourier, TrackingResult
+from .shipment_history import (
+    ShipmentHistory,
+    async_register_websocket,
+    get_history_days,
+    get_keep_history,
+    snapshot,
+    worth_keeping,
+)
 from .owners import owner_device_ids, owner_name
 from .scheduling import CourierSchedule, courier_interval
 from .services import async_setup_services
@@ -72,6 +82,9 @@ _COORDINATOR_TAKES_ENTRY = "config_entry" in inspect.signature(DataUpdateCoordin
 # The schedule of the numbers whose courier isn't known yet
 AUTO_DETECT = CourierType.AUTO.value
 
+# How often shipments past their days in the history are deleted
+HISTORY_PURGE_INTERVAL = timedelta(hours=6)
+
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up the integration actions and the dashboard card."""
     _LOGGER.info("Setting up Greek Courier Tracker integration")
@@ -80,6 +93,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     except Exception as err:
         _LOGGER.error("Could not merge the Greek Courier Tracker entries: %s", err, exc_info=True)
     async_setup_services(hass)
+    async_register_websocket(hass)
     await _async_register_card(hass)
     return True
 
@@ -193,12 +207,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not tracking_numbers:
             _LOGGER.info("No tracking numbers configured yet")
 
+        # Loaded before the first refresh, which may already remove old deliveries
+        history = ShipmentHistory(hass, entry.entry_id)
+        await history.async_load()
+
         coordinator = GreekCourierDataUpdateCoordinator(
             hass=hass,
             tracking_numbers=tracking_numbers,
             tracking_configs=tracking_configs,
             scan_interval=scan_interval,
             entry=entry,
+            history=history,
         )
 
         # Initial refresh to validate configuration
@@ -210,6 +229,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
         entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+
+        @callback
+        def _async_purge_history(_now: datetime | None = None) -> None:
+            history.async_purge(get_history_days(entry))
+
+        _async_purge_history()
+        entry.async_on_unload(async_track_time_interval(hass, _async_purge_history, HISTORY_PURGE_INTERVAL))
+        # Cards that subscribed before the entry was loaded get its history now
+        async_dispatcher_send(hass, SIGNAL_HISTORY_UPDATED)
 
         _LOGGER.info("Greek Courier Tracker setup completed successfully")
         return True
@@ -225,7 +253,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+        async_dispatcher_send(hass, SIGNAL_HISTORY_UPDATED)
     return unload_ok
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Delete the history of removed shipments with the entry."""
+    await ShipmentHistory(hass, entry.entry_id).async_remove()
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -256,6 +290,14 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
         if entity_id:
             registry.async_remove(entity_id)
 
+    # Removed shipments go to the history (if it is on); tracked again, they leave it
+    coordinator.keep_in_history(changes.removed_items)
+    if coordinator.history is not None:
+        coordinator.history.async_delete([item["tracking_number"] for item in changes.added])
+        coordinator.history.async_purge(get_history_days(entry))
+    # The card also shows whether removing keeps a shipment
+    async_dispatcher_send(hass, SIGNAL_HISTORY_UPDATED)
+
     if changes.added:
         async_dispatcher_send(hass, SIGNAL_TRACKING_ADDED.format(entry_id=entry.entry_id), changes.added)
     if changes.changed:
@@ -269,6 +311,8 @@ class TrackingChanges:
     added: list[dict[str, Any]] = field(default_factory=list)
     removed: list[str] = field(default_factory=list)
     changed: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # The settings and last result of every removed number, for the history
+    removed_items: dict[str, tuple[dict[str, Any], TrackingResult | None]] = field(default_factory=dict)
 
 
 class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, TrackingResult]]):
@@ -281,6 +325,7 @@ class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Tracking
         tracking_configs: dict[str, dict],
         scan_interval: int,
         entry: ConfigEntry | None = None,
+        history: ShipmentHistory | None = None,
     ) -> None:
         super().__init__(
             hass,
@@ -293,6 +338,7 @@ class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Tracking
         self.tracking_configs = tracking_configs
         self.scan_interval = scan_interval
         self.entry = entry
+        self.history = history
         self._apply_lock = asyncio.Lock()
         self._fetch_lock = asyncio.Lock()
         self._schedule = CourierSchedule()
@@ -324,15 +370,18 @@ class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Tracking
         async with self._apply_lock:
             new_configs = {item["tracking_number"]: item for item in tracking_data}
             old_configs = self.tracking_configs
+            previous = self.data or {}
+            removed = [number for number in old_configs if number not in new_configs]
 
             changes = TrackingChanges(
                 added=[item for number, item in new_configs.items() if number not in old_configs],
-                removed=[number for number in old_configs if number not in new_configs],
+                removed=removed,
                 changed={
                     number: item
                     for number, item in new_configs.items()
                     if number in old_configs and item != old_configs[number]
                 },
+                removed_items={number: (old_configs[number], previous.get(number)) for number in removed},
             )
             # New numbers, and numbers assigned to another courier, are fetched now
             refetch = [item["tracking_number"] for item in changes.added] + [
@@ -451,9 +500,27 @@ class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Tracking
 
         if expired:
             _LOGGER.info("Removing shipments delivered more than %d days ago: %s", days, expired)
+            # Kept here, not in the options listener: on the first refresh after a
+            # restart the listener isn't registered yet
+            self.keep_in_history({number: (self.tracking_configs[number], data.get(number)) for number in expired})
             save_tracking_data(
                 self.hass, self.entry, remove_tracking_items(get_tracking_data(self.entry), expired)
             )
+
+    def keep_in_history(self, removed: dict[str, tuple[dict[str, Any], TrackingResult | None]]) -> None:
+        """Keep removed shipments, as they are now, if the entry keeps a history.
+
+        Numbers that no courier found aren't kept, nor numbers already kept (the
+        listener sees the shipments that the clean-up of deliveries kept).
+        """
+        if self.history is None or self.entry is None or not get_keep_history(self.entry):
+            return
+        now = dt_util.utcnow()
+        self.history.async_add([
+            snapshot(config, result, now)
+            for number, (config, result) in removed.items()
+            if worth_keeping(result) and number not in self.history
+        ])
 
     def _courier_of(self, number: str, data: dict[str, TrackingResult]) -> str:
         """Return the courier to ask about a number, or "auto" if it isn't known yet."""

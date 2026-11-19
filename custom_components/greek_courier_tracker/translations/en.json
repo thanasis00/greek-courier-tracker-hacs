@@ -79,11 +79,15 @@
         "title": "Settings",
         "data": {
           "scan_interval_minutes": "Minutes between checks per shipment",
-          "auto_remove_delivered": "Remove delivered shipments after (days, 0 = never)"
+          "auto_remove_delivered": "Remove delivered shipments after (days, 0 = never)",
+          "keep_history": "Keep removed shipments in the history",
+          "history_days": "Delete from the history after (days, 0 = never)"
         },
         "data_description": {
           "scan_interval_minutes": "A courier gets one request per interval: with 15 minutes, 1 shipment is checked every 15 minutes, 2 every 30, and so on up to 1 hour. ACS and Geniki check all their shipments together. Minimum 15.",
-          "auto_remove_delivered": "Delivered shipments are removed this many days after delivery. 0 keeps them."
+          "auto_remove_delivered": "Delivered shipments are removed this many days after delivery. 0 keeps them.",
+          "keep_history": "A removed shipment (from the card, the to-do list, an action or the automatic clean-up of deliveries) stays in the card's History as it was: no more checks. Off: removing deletes it.",
+          "history_days": "Shipments are deleted from the history this many days after they were removed. With 0 they stay until you delete them from the card."
         }
       }
     },
@@ -147,7 +151,7 @@
     },
     "remove_tracking": {
       "name": "Remove tracking number",
-      "description": "Stops tracking a shipment and removes its sensor.",
+      "description": "Stops tracking a shipment and removes its sensor. With Configure → Settings → keep removed shipments, it stays in the card's history.",
       "fields": {
         "tracking_number": {
           "name": "Tracking number",
@@ -174,6 +178,16 @@
         "config_entry_id": {
           "name": "Integration entry",
           "description": "Only needed if you have more than one Greek Courier Tracker entry."
+        }
+      }
+    },
+    "delete_history": {
+      "name": "Delete from the history",
+      "description": "Deletes removed shipments from the history for good.",
+      "fields": {
+        "tracking_number": {
+          "name": "Tracking number",
+          "description": "The tracking numbers to delete from the history."
         }
       }
     }

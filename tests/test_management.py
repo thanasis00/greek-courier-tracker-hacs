@@ -708,7 +708,10 @@ class TestFrontendCard:
 
         from custom_components.greek_courier_tracker import services as module
 
-        registered = {module.SERVICE_ADD_TRACKING, module.SERVICE_REMOVE_TRACKING, module.SERVICE_SET_OWNER}
+        registered = {
+            module.SERVICE_ADD_TRACKING, module.SERVICE_REMOVE_TRACKING, module.SERVICE_SET_OWNER,
+            module.SERVICE_DELETE_HISTORY,
+        }
         described = yaml.safe_load((COMPONENT_DIR / "services.yaml").read_text(encoding="utf-8"))
         strings = json.loads((COMPONENT_DIR / "strings.json").read_text(encoding="utf-8"))["services"]
         assert set(described) == registered
@@ -846,9 +849,14 @@ class TestInPlaceUpdates:
         coordinator.async_apply_tracking_data.assert_awaited_once_with(get_tracking_data(entry), 30)
         registry.async_get_entity_id.assert_called_once_with("sensor", "greek_courier_tracker", "entry_1_B2")
         registry.async_remove.assert_called_once_with("sensor.greek_courier_tracker_b2")
-        signals = {call.args[1]: call.args[2] for call in send.call_args_list}
-        assert signals["greek_courier_tracker_tracking_added_entry_1"] == [_item("C3")]
-        assert signals["greek_courier_tracker_tracking_changed_entry_1"] == {"A1": _item("A1", "Renamed")}
+        signals = {call.args[1]: call.args[2:] for call in send.call_args_list}
+        assert signals["greek_courier_tracker_tracking_added_entry_1"] == ([_item("C3")],)
+        assert signals["greek_courier_tracker_tracking_changed_entry_1"] == ({"A1": _item("A1", "Renamed")},)
+        # The removed number goes to the history (if it is on), the added one leaves it
+        assert signals["greek_courier_tracker_history_updated"] == ()
+        coordinator.keep_in_history.assert_called_once_with({})
+        coordinator.history.async_delete.assert_called_once_with(["C3"])
+        coordinator.history.async_purge.assert_called_once_with(0)
         hass.config_entries.async_reload.assert_not_awaited()
 
     @pytest.mark.asyncio

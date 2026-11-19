@@ -13,6 +13,7 @@ from homeassistant.helpers import config_validation as cv
 
 from .const import COURIER_NAMES, DOMAIN, CourierType
 from .owners import async_resolve_owner
+from .shipment_history import loaded_histories
 from .tracking import (
     TrackingNumberExistsError,
     TrackingNumberNotFoundError,
@@ -29,6 +30,7 @@ _LOGGER = logging.getLogger(__name__)
 SERVICE_ADD_TRACKING = "add_tracking"
 SERVICE_REMOVE_TRACKING = "remove_tracking"
 SERVICE_SET_OWNER = "set_owner"
+SERVICE_DELETE_HISTORY = "delete_history"
 
 ATTR_TRACKING_NUMBER = "tracking_number"
 ATTR_NAME = "name"
@@ -57,6 +59,11 @@ SET_OWNER_SCHEMA = vol.Schema({
     # Person entity or user ID; left out or empty = shared
     vol.Optional(ATTR_OWNER): vol.Any(None, cv.string),
     vol.Optional(ATTR_CONFIG_ENTRY_ID): cv.string,
+})
+
+# Removed shipments kept in the history (Configure → Settings)
+DELETE_HISTORY_SCHEMA = vol.Schema({
+    vol.Required(ATTR_TRACKING_NUMBER): vol.All(cv.ensure_list, [cv.string]),
 })
 
 
@@ -164,6 +171,19 @@ async def async_set_owner(hass: HomeAssistant, call: ServiceCall) -> None:
         save_tracking_data(hass, entry, tracking_data)
 
 
+async def async_delete_history(hass: HomeAssistant, call: ServiceCall) -> None:
+    """Handle the delete_history action: forget removed shipments for good."""
+    numbers = {normalize_tracking_number(number) for number in call.data[ATTR_TRACKING_NUMBER]}
+    histories = loaded_histories(hass)
+    missing = {number for number in numbers if not any(number in history for history in histories)}
+    if missing:
+        raise ServiceValidationError(f"{', '.join(sorted(missing))} is not in the history")
+
+    _LOGGER.info("Deleting %s from the history via action", sorted(numbers))
+    for history in histories:
+        history.async_delete(sorted(numbers))
+
+
 def async_setup_services(hass: HomeAssistant) -> None:
     """Register the integration actions."""
     if hass.services.has_service(DOMAIN, SERVICE_ADD_TRACKING):
@@ -178,6 +198,10 @@ def async_setup_services(hass: HomeAssistant) -> None:
     async def _set_owner(call: ServiceCall) -> None:
         await async_set_owner(hass, call)
 
+    async def _delete_history(call: ServiceCall) -> None:
+        await async_delete_history(hass, call)
+
     hass.services.async_register(DOMAIN, SERVICE_ADD_TRACKING, _add, schema=ADD_TRACKING_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_REMOVE_TRACKING, _remove, schema=REMOVE_TRACKING_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_SET_OWNER, _set_owner, schema=SET_OWNER_SCHEMA)
+    hass.services.async_register(DOMAIN, SERVICE_DELETE_HISTORY, _delete_history, schema=DELETE_HISTORY_SCHEMA)

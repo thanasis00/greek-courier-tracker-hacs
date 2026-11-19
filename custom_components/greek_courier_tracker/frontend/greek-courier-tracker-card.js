@@ -8,6 +8,8 @@
  *   title: Shipments          # optional
  *   show_add_form: true       # optional, default true
  *   show_delivered: true      # optional, default true
+ *   show_history: true        # optional, default true: removed shipments kept
+ *                             # by the integration (Configure → Settings)
  *   entities: [...]           # optional, default: all tracking sensors
  *   entry_id: ...             # optional, config entry that new numbers go to
  */
@@ -51,6 +53,12 @@ const STRINGS = {
     updates: (count) => (count === 1 ? "1 update" : `${count} updates`),
     remove: "Remove",
     confirm_remove: "Remove?",
+    move_to_history: "Move to the history",
+    confirm_move: "To the history?",
+    history: (count) => `History (${count})`,
+    removed_on: (date) => `Removed ${date}`,
+    delete_forever: "Delete from the history",
+    confirm_delete: "Delete for good?",
     delivered: "Delivered",
     not_found: "Not found yet",
     unavailable: "Unavailable",
@@ -79,6 +87,12 @@ const STRINGS = {
     updates: (count) => (count === 1 ? "1 ενημέρωση" : `${count} ενημερώσεις`),
     remove: "Αφαίρεση",
     confirm_remove: "Σίγουρα;",
+    move_to_history: "Μεταφορά στο ιστορικό",
+    confirm_move: "Στο ιστορικό;",
+    history: (count) => `Ιστορικό (${count})`,
+    removed_on: (date) => `Αφαιρέθηκε ${date}`,
+    delete_forever: "Διαγραφή από το ιστορικό",
+    confirm_delete: "Οριστική διαγραφή;",
     delivered: "Παραδόθηκε",
     not_found: "Δεν βρέθηκε ακόμα",
     unavailable: "Μη διαθέσιμο",
@@ -143,6 +157,12 @@ const STYLES = `
   .event:last-child { margin-bottom: 0; }
   .event .when { color: var(--secondary-text-color); }
   .empty { border-top: 1px solid var(--divider-color); padding: 14px 0 2px; font-size: 14px; color: var(--secondary-text-color); }
+  button.history-toggle { font: inherit; font-size: 14px; width: 100%; display: flex; align-items: center; gap: 8px; padding: 12px 0 4px; margin: 0; border: none; border-top: 1px solid var(--divider-color); background: none; color: var(--secondary-text-color); cursor: pointer; text-align: left; }
+  button.history-toggle:hover { color: var(--primary-text-color); }
+  button.history-toggle span { flex: 1; }
+  button.history-toggle ha-icon { --mdc-icon-size: 18px; }
+  .kept .row .name { cursor: default; }
+  .kept .bar i.on, .kept .bar i.done { opacity: 0.6; }
   @container (max-width: 520px) {
     form { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
     form.with-owner { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
@@ -183,6 +203,14 @@ function parseEta(value) {
   return match ? parseWhen(match[1], match[2] || "") : null;
 }
 
+/** A UTC timestamp (when a shipment was removed) -> local date label. */
+function parseRemoved(value) {
+  const date = new Date(value || "");
+  if (Number.isNaN(date.getTime())) return null;
+  const pad = (number) => String(number).padStart(2, "0");
+  return parseWhen(`${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`, "");
+}
+
 class GreekCourierTrackerCard extends HTMLElement {
   constructor() {
     super();
@@ -193,6 +221,10 @@ class GreekCourierTrackerCard extends HTMLElement {
     this._editingOwner = null;
     this._signature = "";
     this._lastGood = new Map();
+    // Removed shipments kept by the integration, from its websocket subscription
+    this._history = { shipments: [], keepHistory: false, version: 0 };
+    this._historyOpen = false;
+    this._unsubHistory = null;
   }
 
   static getStubConfig() {
@@ -200,7 +232,7 @@ class GreekCourierTrackerCard extends HTMLElement {
   }
 
   setConfig(config) {
-    this._config = { show_add_form: true, show_delivered: true, ...(config || {}) };
+    this._config = { show_add_form: true, show_delivered: true, show_history: true, ...(config || {}) };
     this._built = false;
     this._signature = "";
     if (this._hass) this._update();
@@ -208,7 +240,47 @@ class GreekCourierTrackerCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
+    this._subscribeHistory();
     this._update();
+  }
+
+  connectedCallback() {
+    if (this._hass) this._subscribeHistory();
+  }
+
+  disconnectedCallback() {
+    const unsub = this._unsubHistory;
+    this._unsubHistory = null;
+    if (typeof unsub === "function") Promise.resolve(unsub()).catch(() => {});
+  }
+
+  /** Follow the history; it also says whether removing keeps a shipment. */
+  async _subscribeHistory() {
+    if (this._unsubHistory || this._subscribing || this._historyUnsupported || !this._hass?.connection) return;
+    this._subscribing = true;
+    try {
+      const unsub = await this._hass.connection.subscribeMessage(
+        (message) => {
+          this._history = {
+            shipments: Array.isArray(message?.shipments) ? message.shipments : [],
+            keepHistory: Boolean(message?.keep_history),
+            version: this._history.version + 1,
+          };
+          this._update();
+        },
+        { type: `${DOMAIN}/history/subscribe` },
+      );
+      if (this.isConnected) {
+        this._unsubHistory = unsub;
+      } else {
+        Promise.resolve(unsub()).catch(() => {});
+      }
+    } catch (err) {
+      // An older version of the integration, without the history
+      this._historyUnsupported = true;
+    } finally {
+      this._subscribing = false;
+    }
   }
 
   getCardSize() {
@@ -257,42 +329,23 @@ class GreekCourierTrackerCard extends HTMLElement {
             (entities?.[id]?.platform === DOMAIN || id.startsWith(`sensor.${DOMAIN}_`)),
         );
 
-    const courierLabels = Object.fromEntries(
-      COURIERS.map(([code, label]) => [code, this._courierLabel(label)]),
-    );
-
     return ids
       .map((id) => this._withLastGood(states[id]))
       .filter(Boolean)
       .map((stateObj) => {
         const attrs = stateObj.attributes || {};
-        const events = Array.isArray(attrs.events) ? attrs.events : [];
-        const unavailable = stateObj.state === "unavailable" || stateObj.state === "unknown";
         // friendly_name is "<device name> <name>"; prefer the plain name
         let name = attrs.tracking_name || attrs.friendly_name || attrs.tracking_number || stateObj.entity_id;
         const deviceName = devices?.[entities?.[stateObj.entity_id]?.device_id]?.name;
         if (!attrs.tracking_name && deviceName && name.startsWith(`${deviceName} `)) {
           name = name.slice(deviceName.length + 1);
         }
-        return {
+        return this._shipment(attrs, {
           entityId: stateObj.entity_id,
           name,
-          trackingNumber: attrs.tracking_number || "",
-          // Only links to the courier websites, never other schemes
-          trackingUrl: /^https?:\/\//.test(attrs.tracking_url || "") ? attrs.tracking_url : "",
-          ownerUserId: attrs.owner_user_id || "",
-          ownerName: attrs.owner || "",
-          courierName: attrs.courier && attrs.courier !== "unknown" ? courierLabels[attrs.courier] || attrs.courier_name || "" : "",
           state: stateObj.state,
-          statusEn: attrs.status || "",
-          statusEl: attrs.status_el || "",
-          eta: parseEta(attrs.estimated_delivery),
-          category: attrs.delivered ? "delivered" : attrs.status_category || "unknown",
-          place: attrs.latest_place || "",
-          when: parseWhen(attrs.latest_date, attrs.latest_time),
-          events,
-          unavailable,
-        };
+          unavailable: stateObj.state === "unavailable" || stateObj.state === "unknown",
+        });
       })
       .filter((shipment) => this._config.show_delivered || shipment.category !== "delivered")
       .sort((a, b) => {
@@ -300,6 +353,45 @@ class GreekCourierTrackerCard extends HTMLElement {
         if (order !== 0) return order;
         return (b.when?.key || "").localeCompare(a.when?.key || "");
       });
+  }
+
+  /** A shipment object from the attributes of a sensor, or of a kept shipment. */
+  _shipment(attrs, extra) {
+    const courierLabels = Object.fromEntries(
+      COURIERS.map(([code, label]) => [code, this._courierLabel(label)]),
+    );
+    return {
+      trackingNumber: attrs.tracking_number || "",
+      // Only links to the courier websites, never other schemes
+      trackingUrl: /^https?:\/\//.test(attrs.tracking_url || "") ? attrs.tracking_url : "",
+      ownerUserId: attrs.owner_user_id || "",
+      ownerName: attrs.owner || "",
+      courierName: attrs.courier && attrs.courier !== "unknown" ? courierLabels[attrs.courier] || attrs.courier_name || "" : "",
+      statusEn: attrs.status || "",
+      statusEl: attrs.status_el || "",
+      eta: parseEta(attrs.estimated_delivery),
+      category: attrs.delivered ? "delivered" : attrs.status_category || "unknown",
+      place: attrs.latest_place || "",
+      when: parseWhen(attrs.latest_date, attrs.latest_time),
+      events: Array.isArray(attrs.events) ? attrs.events : [],
+      ...extra,
+    };
+  }
+
+  /** Removed shipments that the integration keeps, frozen, most recent first. */
+  _keptShipments() {
+    if (this._config.show_history === false) return [];
+    return this._history.shipments.map((item) =>
+      this._shipment(item, {
+        // Keys of the expanded rows; kept rows have no sensor
+        entityId: `history:${item.tracking_number}`,
+        name: item.name || item.tracking_number || "",
+        state: item.status || "",
+        unavailable: false,
+        removed: parseRemoved(item.removed_at),
+        kept: true,
+      }),
+    );
   }
 
   /** Keep showing the last known state while the integration (re)loads. */
@@ -353,6 +445,8 @@ class GreekCourierTrackerCard extends HTMLElement {
       this._armedRemove,
       this._editingOwner,
       this._people().map((person) => [person.entityId, person.name]),
+      this._history.version,
+      this._historyOpen,
     ]);
     if (signature === this._signature) return;
     this._signature = signature;
@@ -493,27 +587,43 @@ class GreekCourierTrackerCard extends HTMLElement {
       } catch (err) {
         // Not supported: the focused dropdown opens on the next click
       }
-    } else if (action === "remove") {
-      // First click arms the button, second click removes
-      if (this._armedRemove !== id) {
-        this._armedRemove = id;
-        clearTimeout(this._armTimer);
-        this._armTimer = setTimeout(() => {
-          this._armedRemove = null;
-          this._update();
-        }, 4000);
-        this._update();
-        return;
-      }
-      this._armedRemove = null;
-      try {
-        // The integration finds the entry that tracks the number
-        await this._hass.callService(DOMAIN, "remove_tracking", { tracking_number: id });
-      } catch (err) {
-        this._message(err?.message || String(err), true);
-      }
+    } else if (action === "history") {
+      this._historyOpen = !this._historyOpen;
       this._update();
+    } else if (action === "remove") {
+      if (this._arm(id)) return;
+      // The integration finds the entry that tracks the number (and keeps it in
+      // the history if it is set to)
+      await this._call("remove_tracking", { tracking_number: id });
+    } else if (action === "delete-history") {
+      if (this._arm(`history:${id}`)) return;
+      await this._call("delete_history", { tracking_number: id });
     }
+  }
+
+  /** First click arms a remove button; returns false on the second (confirming) click. */
+  _arm(key) {
+    clearTimeout(this._armTimer);
+    if (this._armedRemove === key) {
+      this._armedRemove = null;
+      return false;
+    }
+    this._armedRemove = key;
+    this._armTimer = setTimeout(() => {
+      this._armedRemove = null;
+      this._update();
+    }, 4000);
+    this._update();
+    return true;
+  }
+
+  async _call(service, data) {
+    try {
+      await this._hass.callService(DOMAIN, service, data);
+    } catch (err) {
+      this._message(err?.message || String(err), true);
+    }
+    this._update();
   }
 
   async _copy(button) {
@@ -621,64 +731,110 @@ class GreekCourierTrackerCard extends HTMLElement {
         <div class="foot"><div class="ids">${this._numberTag(number)}</div></div>
       </div>`);
 
-    const rows = shipments.map((s) => {
-      const delivered = s.category === "delivered";
-      const expanded = this._expanded.has(s.entityId);
-      const armed = this._armedRemove === s.trackingNumber;
-      const badge = delivered
-        ? `<span class="badge ok"><ha-icon icon="mdi:check"></ha-icon> ${escapeHtml(t.delivered)}</span>`
-        : s.courierName ? `<span class="badge">${escapeHtml(s.courierName)}</span>` : "";
-      const statusText = this._statusText(s);
-      const muted = s.unavailable || s.statusEn === "Not Found";
-
-      const chip = (icon, text) =>
-        `<span class="chip" title="${escapeHtml(text)}"><ha-icon icon="${icon}"></ha-icon><span>${escapeHtml(text)}</span></span>`;
-      const details = [
-        delivered && s.courierName ? chip("mdi:truck-outline", s.courierName) : "",
-        s.place ? chip("mdi:map-marker-outline", s.place) : "",
-        s.when ? chip("mdi:clock-outline", s.when.label) : "",
-        !delivered && s.eta ? chip("mdi:calendar-clock", `${t.expected} ${s.eta.label}`) : "",
-      ].filter(Boolean).join("");
-      const ids = [
-        s.trackingNumber ? this._numberTag(s.trackingNumber, s.trackingUrl, s.courierName) : "",
-        this._ownerTag(s, people),
-      ].filter(Boolean).join("");
-      const actions = [
-        s.events.length
-          ? `<button class="link" data-action="toggle" data-id="${escapeHtml(s.entityId)}" aria-expanded="${expanded}">${escapeHtml(t.updates(s.events.length))}<ha-icon icon="mdi:chevron-${expanded ? "up" : "down"}"></ha-icon></button>`
-          : "",
-        s.trackingNumber
-          ? `<button class="link remove${armed ? " armed" : ""}" data-action="remove" data-id="${escapeHtml(s.trackingNumber)}" title="${escapeHtml(t.remove)}">${armed ? `${escapeHtml(t.confirm_remove)} ` : ""}<ha-icon icon="mdi:delete${armed ? "" : "-outline"}"></ha-icon></button>`
-          : "",
-      ].filter(Boolean).join("");
-
-      const timeline = expanded
-        ? `<div class="timeline">${s.events.map((event) => {
-            const when = parseWhen(event.date, event.time);
-            const parts = [when ? `<span class="when">${escapeHtml(when.label)}</span>` : "", escapeHtml(this._eventText(event))];
-            if (event.location) parts.push(`<span class="when">${escapeHtml(event.location)}</span>`);
-            return `<div class="event">${parts.filter(Boolean).join(" · ")}</div>`;
-          }).join("")}</div>`
-        : "";
-
-      return `
-        <div class="row">
-          <div class="head">
-            <span class="name" data-action="more-info" data-id="${escapeHtml(s.entityId)}">${escapeHtml(s.name)}</span>
-            ${badge}
-          </div>
-          ${delivered ? "" : `<div class="status${muted ? " muted" : ""}">${escapeHtml(statusText)}</div>`}
-          ${this._bar(s.category)}
-          ${details ? `<div class="details">${details}</div>` : ""}
-          <div class="foot"><div class="ids">${ids}</div><div class="actions">${actions}</div></div>
-          ${timeline}
-        </div>`;
-    });
-
+    const rows = shipments.map((s) => this._row(s, people));
     const all = [...pendingRows, ...rows];
-    list.innerHTML = all.length
+    list.innerHTML = (all.length
       ? all.join("")
-      : `<div class="empty">${escapeHtml(this._config.show_add_form !== false ? t.empty : t.empty_no_form)}</div>`;
+      : `<div class="empty">${escapeHtml(this._config.show_add_form !== false ? t.empty : t.empty_no_form)}</div>`)
+      + this._historyBlock(people);
+  }
+
+  /** The collapsible list of removed shipments the integration keeps. */
+  _historyBlock(people) {
+    const kept = this._keptShipments();
+    if (!kept.length) return "";
+    const open = this._historyOpen;
+    return `
+      <button class="history-toggle" data-action="history" aria-expanded="${open}">
+        <ha-icon icon="mdi:archive-outline"></ha-icon><span>${escapeHtml(this._t.history(kept.length))}</span><ha-icon icon="mdi:chevron-${open ? "up" : "down"}"></ha-icon>
+      </button>
+      ${open ? `<div class="kept">${kept.map((s) => this._row(s, people)).join("")}</div>` : ""}`;
+  }
+
+  /** Remove button of a tracked shipment; with the history on, it moves the shipment there. */
+  _removeButton(s) {
+    const t = this._t;
+    const armed = this._armedRemove === s.trackingNumber;
+    // Like the integration, numbers that no courier found aren't kept
+    const keeps = this._history.keepHistory && !s.unavailable && s.statusEn !== "Not Found" && s.statusEn !== "Error";
+    const [title, confirm, icon] = keeps
+      ? [t.move_to_history, t.confirm_move, "mdi:archive-arrow-down"]
+      : [t.remove, t.confirm_remove, "mdi:delete"];
+    return `<button class="link remove${armed ? " armed" : ""}" data-action="remove" data-id="${escapeHtml(s.trackingNumber)}" title="${escapeHtml(title)}">${armed ? `${escapeHtml(confirm)} ` : ""}<ha-icon icon="${icon}${armed ? "" : "-outline"}"></ha-icon></button>`;
+  }
+
+  /** Delete button of a kept shipment. */
+  _deleteButton(s) {
+    const t = this._t;
+    const armed = this._armedRemove === `history:${s.trackingNumber}`;
+    return `<button class="link remove${armed ? " armed" : ""}" data-action="delete-history" data-id="${escapeHtml(s.trackingNumber)}" title="${escapeHtml(t.delete_forever)}">${armed ? `${escapeHtml(t.confirm_delete)} ` : ""}<ha-icon icon="mdi:delete${armed ? "" : "-outline"}"></ha-icon></button>`;
+  }
+
+  /** Owner of a kept shipment, as text (it can't change any more). */
+  _keptOwnerTag(s, people) {
+    if (people.length < 2) return "";
+    const person = people.find((p) => p.userId === s.ownerUserId);
+    const label = s.ownerUserId ? person?.name || s.ownerUserId : this._t.shared;
+    const icon = s.ownerUserId ? "mdi:account-outline" : "mdi:account-multiple-outline";
+    return `<span class="chip"><ha-icon icon="${icon}"></ha-icon><span>${escapeHtml(label)}</span></span>`;
+  }
+
+  /** One shipment: tracked (from its sensor) or kept in the history (s.kept). */
+  _row(s, people) {
+    const t = this._t;
+    const delivered = s.category === "delivered";
+    const expanded = this._expanded.has(s.entityId);
+    const badge = delivered
+      ? `<span class="badge ok"><ha-icon icon="mdi:check"></ha-icon> ${escapeHtml(t.delivered)}</span>`
+      : s.courierName ? `<span class="badge">${escapeHtml(s.courierName)}</span>` : "";
+    const statusText = this._statusText(s);
+    const muted = s.unavailable || s.statusEn === "Not Found";
+
+    const chip = (icon, text) =>
+      `<span class="chip" title="${escapeHtml(text)}"><ha-icon icon="${icon}"></ha-icon><span>${escapeHtml(text)}</span></span>`;
+    const details = [
+      delivered && s.courierName ? chip("mdi:truck-outline", s.courierName) : "",
+      s.place ? chip("mdi:map-marker-outline", s.place) : "",
+      s.when ? chip("mdi:clock-outline", s.when.label) : "",
+      !delivered && !s.kept && s.eta ? chip("mdi:calendar-clock", `${t.expected} ${s.eta.label}`) : "",
+      s.kept && s.removed ? chip("mdi:archive-outline", t.removed_on(s.removed.label)) : "",
+    ].filter(Boolean).join("");
+    const ids = [
+      s.trackingNumber ? this._numberTag(s.trackingNumber, s.trackingUrl, s.courierName) : "",
+      s.kept ? this._keptOwnerTag(s, people) : this._ownerTag(s, people),
+    ].filter(Boolean).join("");
+    const actions = [
+      s.events.length
+        ? `<button class="link" data-action="toggle" data-id="${escapeHtml(s.entityId)}" aria-expanded="${expanded}">${escapeHtml(t.updates(s.events.length))}<ha-icon icon="mdi:chevron-${expanded ? "up" : "down"}"></ha-icon></button>`
+        : "",
+      s.trackingNumber ? (s.kept ? this._deleteButton(s) : this._removeButton(s)) : "",
+    ].filter(Boolean).join("");
+
+    const timeline = expanded
+      ? `<div class="timeline">${s.events.map((event) => {
+          const when = parseWhen(event.date, event.time);
+          const parts = [when ? `<span class="when">${escapeHtml(when.label)}</span>` : "", escapeHtml(this._eventText(event))];
+          if (event.location) parts.push(`<span class="when">${escapeHtml(event.location)}</span>`);
+          return `<div class="event">${parts.filter(Boolean).join(" · ")}</div>`;
+        }).join("")}</div>`
+      : "";
+
+    // Kept shipments have no sensor, so no more-info dialog
+    const name = s.kept
+      ? `<span class="name">${escapeHtml(s.name)}</span>`
+      : `<span class="name" data-action="more-info" data-id="${escapeHtml(s.entityId)}">${escapeHtml(s.name)}</span>`;
+    return `
+      <div class="row">
+        <div class="head">
+          ${name}
+          ${badge}
+        </div>
+        ${delivered ? "" : `<div class="status${muted ? " muted" : ""}">${escapeHtml(statusText)}</div>`}
+        ${this._bar(s.category)}
+        ${details ? `<div class="details">${details}</div>` : ""}
+        <div class="foot"><div class="ids">${ids}</div><div class="actions">${actions}</div></div>
+        ${timeline}
+      </div>`;
   }
 }
 

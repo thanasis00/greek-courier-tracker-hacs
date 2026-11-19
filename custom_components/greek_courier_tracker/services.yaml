@@ -64,3 +64,11 @@ set_owner:
       selector:
         config_entry:
           integration: greek_courier_tracker
+
+delete_history:
+  fields:
+    tracking_number:
+      required: true
+      example: "SE123456789GR"
+      selector:
+        text:

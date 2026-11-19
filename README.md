@@ -43,7 +43,18 @@ Restart Home Assistant.
 3. Optionally enter your first tracking number (you can add more any time)
 4. Set the minutes between checks per shipment (default and minimum: 15, see [How often couriers are checked](#how-often-couriers-are-checked))
 
-Later, Configure → Settings lets you change the scan interval and remove delivered shipments automatically a number of days after delivery (off by default).
+Later, Configure → Settings lets you change the scan interval, remove delivered shipments automatically a number of days after delivery (off by default), and keep removed shipments in a history (see [History of removed shipments](#history-of-removed-shipments)).
+
+### History of removed shipments
+
+By default, removing a shipment deletes it: its sensor and its details are gone. Turn on **Keep removed shipments in the history** in Configure → Settings to keep them instead. A shipment removed in any way (the card, the to-do list, `remove_tracking`, Configure, or the automatic removal after delivery) then stays in the card's **History** section exactly as it was: status, events, courier and owner, frozen. Its courier is never asked again and it has no sensor.
+
+- **Delete from the history after (days)**: kept shipments are deleted this many days after they were removed; `0` (the default) keeps them until you delete them.
+- Delete one from the card (the bin icon, click twice) or with the `greek_courier_tracker.delete_history` action.
+- Adding a kept number again takes it out of the history and tracks it again.
+- Numbers that no courier ever found have nothing worth keeping and are deleted as before.
+
+The history is stored in `.storage/greek_courier_tracker.<entry id>.history` (in Home Assistant backups) and is deleted with the integration.
 
 ## How often couriers are checked
 
@@ -117,6 +128,7 @@ Each shipment shows its progress (created → in transit → delivered), latest 
 | `title` | Shipments | Card title |
 | `show_add_form` | `true` | Show the form for adding tracking numbers |
 | `show_delivered` | `true` | Show delivered shipments |
+| `show_history` | `true` | Show the [history of removed shipments](#history-of-removed-shipments) (when there is one) |
 | `entities` | all | Only show these tracking sensors |
 | `entry_id` | first entry | Config entry that new numbers are added to |
 
