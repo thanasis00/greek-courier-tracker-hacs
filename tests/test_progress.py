@@ -236,6 +236,52 @@ class TestACS:
         assert (result.stage, result.status, result.estimated_delivery) == ("delivered", "Delivered", None)
 
 
+class TestACSNewerAnswer:
+    """Answers with the text in controlPoint and the steps not reached yet without a date."""
+
+    HISTORY = [
+        {"controlPointDate": "2026-11-20T02:53:00", "controlPoint": "Στο κέντρο διαλογής Αθήνα", "description": ""},
+        {"controlPointDate": "2026-11-18T00:00:00", "controlPoint": "Παραλαβή αποστολής", "description": ""},
+        {"controlPointDate": None, "controlPoint": "Στο αρμόδιο κατάστημα παράδοσης", "description": ""},
+        {"controlPointDate": None, "controlPoint": "Παραδόθηκε", "description": ""},
+    ]
+
+    def _parse(self, history=None, **parcel):
+        items = [{"statusHistory": history or self.HISTORY, "isDelivered": False, **parcel}]
+        return ACSCourier()._parse_response("9826520605", {"items": items})
+
+    def test_status_is_the_step(self):
+        result = self._parse()
+
+        assert result.status == "Στο κέντρο διαλογής Αθήνα"
+        assert [event.status for event in result.events] == ["Στο κέντρο διαλογής Αθήνα", "Παραλαβή αποστολής"]
+        # Not the translation of an empty text
+        assert [event.status_translated for event in result.events] == [event.status for event in result.events]
+        assert result.latest_event.location == ""
+
+    def test_steps_not_reached_dont_count(self):
+        """The undated "Παραδόθηκε" step is not a delivery."""
+        result = self._parse()
+        assert (result.stage, result.status_category) == ("in_transit", "in_transit")
+
+    def test_at_the_delivery_branch(self):
+        history = [
+            {"controlPointDate": "2026-11-21T08:10:00", "controlPoint": "Στο αρμόδιο κατάστημα παράδοσης", "description": ""},
+            *self.HISTORY[:2],
+            self.HISTORY[3],
+        ]
+        assert self._parse(history).stage == "in_transit"
+
+    def test_only_steps_not_reached(self):
+        result = self._parse(self.HISTORY[2:])
+        assert (result.status, result.stage, result.events) == ("Shipment Created", "created", [])
+
+    def test_greek_state(self):
+        from custom_components.greek_courier_tracker.tracking import status_text
+
+        assert status_text(self._parse(), "el") == "Στο κέντρο διαλογής Αθήνα"
+
+
 class TestSkroutz:
     def test_cancelled(self):
         data = {"status": "created", "isCompleteCancelled": True, "trackingDetails": []}

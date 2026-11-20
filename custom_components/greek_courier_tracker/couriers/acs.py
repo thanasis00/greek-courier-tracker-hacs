@@ -56,6 +56,9 @@ class ACSCourier(BaseCourier):
         ("παρεληφθη", STAGE_CREATED, None),
         ("received", STAGE_CREATED, None),
         ("διακριση", STAGE_IN_TRANSIT, None),
+        # The steps of newer answers
+        ("παραλαβη αποστολης", STAGE_IN_TRANSIT, None),
+        ("καταστημα παραδοσης", STAGE_IN_TRANSIT, None),
     ]
 
     # Shared by all instances: one token serves every request for a while
@@ -210,20 +213,40 @@ class ACSCourier(BaseCourier):
         events = []
         for event in raw_events:
             date_str = event.get("controlPointDate") or ""
+            if not date_str:
+                # A step the parcel hasn't reached yet ("Παραδόθηκε" before delivery)
+                continue
             # Parse ISO date
             date_part = date_str.split("T")[0] if "T" in date_str else date_str
             time_part = date_str.split("T")[1][:5] if "T" in date_str else ""
 
+            # Older answers: the text in description, the branch in controlPoint.
+            # Newer ones: an empty description and the text in controlPoint
+            # ("Στο κέντρο διαλογής Αθήνα"), as the ACS website shows it.
+            description = (event.get("description") or "").strip()
+            control_point = (event.get("controlPoint") or "").strip()
+            text = description or control_point
             events.append(TrackingEvent(
                 date=date_part,
                 time=time_part,
-                location=event.get("controlPoint") or "",
-                status=event.get("description") or "",
-                status_translated=self.translate_status(
-                    event.get("description") or "",
-                    self.STATUS_TRANSLATIONS
-                ),
+                location=control_point if description else "",
+                status=text,
+                status_translated=self.translate_status(text, self.STATUS_TRANSLATIONS),
             ))
+
+        if not events:
+            # Only steps it hasn't reached: ACS knows the voucher, nothing more
+            return TrackingResult(
+                success=True,
+                tracking_number=tracking_number,
+                courier=self.COURIER_CODE,
+                courier_name=self.COURIER_NAME,
+                status="Shipment Created",
+                status_category=stage_category(STAGE_CREATED),
+                events=[],
+                raw_data=data,
+                stage=STAGE_CREATED,
+            )
 
         # Keep newest first like the other couriers
         events.sort(key=lambda event: (event.date, event.time or ""), reverse=True)

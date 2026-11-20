@@ -342,7 +342,10 @@ class BaseCourier(ABC):
             Translated status or original if no translation found
         """
         status_lower = status.lower()
-        
+        # An empty status is "in" every phrase: it has no translation
+        if not status_lower.strip():
+            return status
+
         # Check for exact match
         for greek, english in translations.items():
             if greek.lower() == status_lower:
