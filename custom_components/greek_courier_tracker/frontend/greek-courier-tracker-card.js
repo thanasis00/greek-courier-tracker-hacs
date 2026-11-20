@@ -75,6 +75,9 @@ const STRINGS = {
       delivered: "Delivered",
     },
     last_mile: "Delivery",
+    days_ago: (days) => (days === 1 ? "1 day ago" : `${days} days ago`),
+    no_movement: (days) => (days === 1 ? "No movement for 1 day" : `No movement for ${days} days`),
+    checked: (when) => `Checked ${when}`,
     problems: {
       attempt_failed: "Delivery attempt failed",
       rerouted: "Delivery changed",
@@ -126,6 +129,9 @@ const STRINGS = {
       delivered: "Παραδόθηκε",
     },
     last_mile: "Παράδοση",
+    days_ago: (days) => (days === 1 ? "πριν 1 ημέρα" : `πριν ${days} ημέρες`),
+    no_movement: (days) => (days === 1 ? "Καμία κίνηση εδώ και 1 ημέρα" : `Καμία κίνηση εδώ και ${days} ημέρες`),
+    checked: (when) => `Έλεγχος ${when}`,
     problems: {
       attempt_failed: "Αποτυχημένη απόπειρα παράδοσης",
       rerouted: "Αλλαγή παράδοσης",
@@ -249,6 +255,26 @@ function parseWhen(date, time) {
 function parseEta(value) {
   const match = String(value || "").match(/^(\d{4}-\d{2}-\d{2})(?:T(\d{2}:\d{2}))?/);
   return match ? parseWhen(match[1], match[2] || "") : null;
+}
+
+/** Whole days since a parseWhen() key ("2026-11-19 10:30"), or null. */
+function daysSince(key) {
+  const match = String(key || "").match(/^(\d{4})-(\d{2})-(\d{2})(?: (\d{2}):(\d{2}))?/);
+  if (!match) return null;
+  const [, year, month, day, hour = "0", minute = "0"] = match;
+  const then = new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute));
+  return Math.max(0, Math.floor((Date.now() - then.getTime()) / 86400000));
+}
+
+/** When the integration last heard from the courier: time today, else date and time. */
+function parseChecked(value) {
+  const date = new Date(value || "");
+  if (Number.isNaN(date.getTime())) return null;
+  const pad = (number) => String(number).padStart(2, "0");
+  const time = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return date.toDateString() === new Date().toDateString()
+    ? time
+    : parseWhen(`${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`, time).label;
 }
 
 /** A UTC timestamp (when a shipment was removed) -> local date label. */
@@ -426,6 +452,8 @@ class GreekCourierTrackerCard extends HTMLElement {
       problem: attrs.problem || null,
       place: attrs.latest_place || "",
       when: parseWhen(attrs.latest_date, attrs.latest_time),
+      stalled: Boolean(attrs.stalled),
+      checked: parseChecked(attrs.last_updated),
       events: Array.isArray(attrs.events) ? attrs.events : [],
       ...extra,
     };
@@ -869,13 +897,22 @@ class GreekCourierTrackerCard extends HTMLElement {
     const problemChip = problemText
       ? `<span class="chip ${FINAL_PROBLEMS.has(s.problem) ? "bad" : "warn"}" title="${escapeHtml(problemText)}"><ha-icon icon="mdi:alert-circle-outline"></ha-icon><span>${escapeHtml(problemText)}</span></span>`
       : "";
+    // How long ago the latest event was, when that is a day or more
+    const idle = s.when ? daysSince(s.when.key) : null;
+    const whenText = s.when ? (idle && !delivered && !s.kept ? `${s.when.label} · ${t.days_ago(idle)}` : s.when.label) : "";
+    const stalledChip = s.stalled && !delivered && !s.kept && idle
+      ? `<span class="chip warn"><ha-icon icon="mdi:timer-sand"></ha-icon><span>${escapeHtml(t.no_movement(idle))}</span></span>`
+      : "";
     const details = [
       problemChip,
+      stalledChip,
       delivered && s.courierName ? chip("mdi:truck-outline", s.courierName) : "",
       s.place ? chip("mdi:map-marker-outline", s.place) : "",
-      s.when ? chip("mdi:clock-outline", s.when.label) : "",
+      s.when ? chip("mdi:clock-outline", whenText) : "",
       !delivered && !s.kept && s.eta ? chip("mdi:calendar-clock", `${t.expected} ${s.eta.label}`) : "",
       s.kept && s.removed ? chip("mdi:archive-outline", t.removed_on(s.removed.label)) : "",
+      // Shows the integration still asks the courier, even when nothing new came
+      !delivered && !s.kept && s.checked ? chip("mdi:refresh", t.checked(s.checked)) : "",
     ].filter(Boolean).join("");
     const ids = [
       s.trackingNumber ? this._numberTag(s.trackingNumber, s.trackingUrl, s.courierName) : "",

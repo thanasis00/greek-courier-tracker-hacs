@@ -3,17 +3,21 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import (
     CONF_AUTO_REMOVE_DELIVERED,
+    CONF_NO_MOVEMENT_DAYS,
     CONF_LEGACY_SCAN_INTERVAL_HOURS,
     CONF_SCAN_INTERVAL,
     CONF_TRACKING_NUMBERS,
     DEFAULT_AUTO_REMOVE_DELIVERED,
+    DEFAULT_NO_MOVEMENT_DAYS,
     DEFAULT_SCAN_INTERVAL,
     MAX_SCAN_INTERVAL,
     MIN_SCAN_INTERVAL,
@@ -131,6 +135,42 @@ def get_tracking_data(entry: ConfigEntry) -> list[dict[str, Any]]:
 def get_auto_remove_days(entry: ConfigEntry) -> int:
     """Days after delivery when a shipment is removed (0 keeps it)."""
     return int((entry.options or {}).get(CONF_AUTO_REMOVE_DELIVERED, DEFAULT_AUTO_REMOVE_DELIVERED))
+
+
+def get_no_movement_days(entry: ConfigEntry) -> int:
+    """Days without a new event before a notice (0: no notice)."""
+    return int((entry.options or {}).get(CONF_NO_MOVEMENT_DAYS, DEFAULT_NO_MOVEMENT_DAYS))
+
+
+# The couriers give local (Greek) times
+ATHENS = ZoneInfo("Europe/Athens")
+EVENT_DATE_FORMATS = ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%d.%m.%Y")
+
+
+def last_movement(result: TrackingResult) -> datetime | None:
+    """When the latest event happened, if its date can be read."""
+    latest = result.latest_event
+    if latest is None or not latest.date:
+        return None
+    for fmt in EVENT_DATE_FORMATS:
+        try:
+            moment = datetime.strptime(latest.date.strip(), fmt)
+            break
+        except ValueError:
+            continue
+    else:
+        return None
+    match = re.match(r"^\s*(\d{1,2}):(\d{2})", latest.time or "")
+    if match:
+        moment = moment.replace(hour=int(match.group(1)), minute=int(match.group(2)))
+    return moment.replace(tzinfo=ATHENS)
+
+
+def no_movement_text(days: int, language: str | None) -> str:
+    """ "No movement for 3 days", in Greek for a Greek Home Assistant."""
+    if (language if isinstance(language, str) else "").lower().startswith("el"):
+        return "Καμία κίνηση εδώ και 1 ημέρα" if days == 1 else f"Καμία κίνηση εδώ και {days} ημέρες"
+    return "No movement for 1 day" if days == 1 else f"No movement for {days} days"
 
 
 def status_text(result: TrackingResult, language: str | None, stopped: bool = False) -> str:

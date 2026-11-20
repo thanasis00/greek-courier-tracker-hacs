@@ -22,6 +22,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.start import async_at_started
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.const import Platform
 from homeassistant.loader import async_get_integration
@@ -35,6 +36,8 @@ from .const import (
     CONF_SCAN_INTERVAL,
     CONF_TRACKING_NUMBERS,
     DOMAIN,
+    EVENT_NO_MOVEMENT,
+    EVENT_SHIPMENT_UPDATED,
     EVENT_STATUS_CHANGED,
     NUMBER_TIMEOUT,
     REQUEST_SPACING,
@@ -50,7 +53,15 @@ from .couriers import (
     is_refused,
     track_with_auto_detect,
 )
-from .couriers.base import FINAL_PROBLEMS, STAGE_LEVELS, BaseCourier, TrackingResult, stage_category
+from .couriers.base import (
+    FINAL_PROBLEMS,
+    PROBLEM_CANCELLED,
+    PROBLEM_RETURNED,
+    STAGE_LEVELS,
+    BaseCourier,
+    TrackingResult,
+    stage_category,
+)
 from .shipment_history import (
     ShipmentHistory,
     async_register_websocket,
@@ -66,7 +77,10 @@ from .services import async_setup_services
 from .tracking import (
     get_auto_remove_days,
     get_scan_interval,
+    get_no_movement_days,
     get_tracking_data,
+    last_movement,
+    no_movement_text,
     problem_text,
     remove_tracking_items,
     save_tracking_data,
@@ -225,6 +239,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             history=history,
         )
 
+        await coordinator.async_load_notices()
+
         # Initial refresh to validate configuration
         _LOGGER.info("Performing initial data refresh...")
         await coordinator.async_config_entry_first_refresh()
@@ -265,6 +281,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Delete the history of removed shipments with the entry."""
     await ShipmentHistory(hass, entry.entry_id).async_remove()
+    await Store(hass, 1, no_movement_store_key(entry.entry_id)).async_remove()
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -307,6 +324,11 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
         async_dispatcher_send(hass, SIGNAL_TRACKING_ADDED.format(entry_id=entry.entry_id), changes.added)
     if changes.changed:
         async_dispatcher_send(hass, SIGNAL_TRACKING_CHANGED.format(entry_id=entry.entry_id), changes.changed)
+
+
+def no_movement_store_key(entry_id: str) -> str:
+    """Storage of the "no movement" notices of an entry."""
+    return f"{DOMAIN}.{entry_id}.no_movement"
 
 
 def _keep_stage(previous: TrackingResult | None, result: TrackingResult) -> None:
@@ -360,6 +382,11 @@ class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Tracking
         self.scan_interval = scan_interval
         self.entry = entry
         self.history = history
+        # Shipments whose "no movement" notice was sent: {number: their latest event}
+        self._no_movement_sent: dict[str, str] = {}
+        self._no_movement_store: Store[dict[str, str]] | None = (
+            Store(hass, 1, no_movement_store_key(entry.entry_id)) if entry is not None else None
+        )
         self._apply_lock = asyncio.Lock()
         self._fetch_lock = asyncio.Lock()
         self._schedule = CourierSchedule()
@@ -440,10 +467,12 @@ class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Tracking
     ) -> None:
         """Announce status changes and clean up old deliveries."""
         self._fire_status_events(old_data, new_data)
+        self._notice_no_movement(new_data)
         self._remove_expired_deliveries(new_data)
 
     @staticmethod
     def _status_key(result: TrackingResult) -> tuple:
+        """What a status change is: the status, its stage or problem, the latest event text."""
         latest = result.latest_event
         return (
             result.status,
@@ -453,50 +482,141 @@ class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Tracking
             latest.status if latest else None,
         )
 
+    @classmethod
+    def _update_key(cls, result: TrackingResult) -> tuple:
+        """What an update is: any new event, even one with the same text in another place."""
+        latest = result.latest_event
+        return (
+            *cls._status_key(result),
+            len(result.events),
+            (latest.date, latest.time, latest.location) if latest else None,
+        )
+
+    def _entity_id(self, number: str) -> str | None:
+        """The sensor of a tracking number, if the registry knows it."""
+        if self.entry is None:
+            return None
+        try:
+            return er.async_get(self.hass).async_get_entity_id(
+                "sensor", DOMAIN, sensor_unique_id(self.entry.entry_id, number)
+            )
+        except Exception:  # registry not available (tests)
+            return None
+
+    def _shipment_event_data(self, number: str, result: TrackingResult, language: str | None) -> dict[str, Any]:
+        """What the events of a shipment say about it now."""
+        config = self.tracking_configs.get(number, {})
+        owner = config.get("owner")
+        latest = result.latest_event
+        return {
+            "entity_id": self._entity_id(number),
+            "tracking_number": number,
+            "name": config.get("name", number),
+            "courier": str(getattr(result.courier, "value", result.courier)),
+            "courier_name": result.courier_name,
+            "status": status_text(result, language),
+            "status_en": result.status,
+            "status_category": result.status_category,
+            "delivered": result.status_category == "delivered",
+            "stage": result.stage,
+            "problem": result.problem,
+            "problem_text": problem_text(result.problem, language),
+            "location": latest.location if latest else None,
+            "estimated_delivery": result.estimated_delivery,
+            # Shared shipments have no owner (and None instead of a phone list)
+            "owner_user_id": owner,
+            "owner": owner_name(self.hass, owner),
+            "owner_device_ids": owner_device_ids(self.hass, owner) if owner else None,
+        }
+
     def _fire_status_events(
         self, old_data: dict[str, TrackingResult], new_data: dict[str, TrackingResult]
     ) -> None:
-        """Fire greek_courier_tracker_status_changed for every shipment that moved."""
+        """Fire the events of every shipment that moved.
+
+        greek_courier_tracker_shipment_updated: every new update, even one with the
+        same text in another place; greek_courier_tracker_status_changed: only when
+        the status itself changed (as before there was the other event).
+        """
         language = getattr(self.hass.config, "language", None)
         for number, result in new_data.items():
             old = old_data.get(number)
-            if old is None or not result.success or self._status_key(old) == self._status_key(result):
+            if old is None or not result.success or self._update_key(old) == self._update_key(result):
                 continue
 
-            entity_id = None
-            if self.entry is not None:
-                try:
-                    entity_id = er.async_get(self.hass).async_get_entity_id(
-                        "sensor", DOMAIN, sensor_unique_id(self.entry.entry_id, number)
-                    )
-                except Exception:  # registry not available (tests)
-                    entity_id = None
-
-            config = self.tracking_configs.get(number, {})
-            owner = config.get("owner")
-            latest = result.latest_event
-            self.hass.bus.async_fire(EVENT_STATUS_CHANGED, {
-                "entity_id": entity_id,
-                "tracking_number": number,
-                "name": config.get("name", number),
-                "courier": str(getattr(result.courier, "value", result.courier)),
-                "courier_name": result.courier_name,
+            data = self._shipment_event_data(number, result, language)
+            status_changed = self._status_key(old) != self._status_key(result)
+            changes = {
                 "old_status": status_text(old, language),
-                "status": status_text(result, language),
-                "status_en": result.status,
-                "status_category": result.status_category,
-                "delivered": result.status_category == "delivered",
-                "stage": result.stage,
-                "problem": result.problem,
                 "old_problem": old.problem,
-                "problem_text": problem_text(result.problem, language),
-                "location": latest.location if latest else None,
-                "estimated_delivery": result.estimated_delivery,
-                # Shared shipments have no owner (and None instead of a phone list)
-                "owner_user_id": owner,
-                "owner": owner_name(self.hass, owner),
-                "owner_device_ids": owner_device_ids(self.hass, owner) if owner else None,
+                "old_stage": old.stage,
+            }
+            self.hass.bus.async_fire(EVENT_SHIPMENT_UPDATED, {
+                **data,
+                **changes,
+                "status_changed": status_changed,
+                "stage_changed": old.stage != result.stage,
             })
+            if status_changed:
+                self.hass.bus.async_fire(EVENT_STATUS_CHANGED, {**data, **changes})
+
+    async def async_load_notices(self) -> None:
+        """Read which "no movement" notices were already sent (they survive restarts)."""
+        if self._no_movement_store is not None:
+            self._no_movement_sent = dict(await self._no_movement_store.async_load() or {})
+
+    @staticmethod
+    def _movement_key(result: TrackingResult) -> str:
+        latest = result.latest_event
+        return f"{latest.date} {latest.time} {latest.location} {latest.status}" if latest else ""
+
+    def stalled_since(self, number: str, now: datetime | None = None) -> datetime | None:
+        """When a shipment last moved, if that is longer ago than the configured days."""
+        result = (self.data or {}).get(number)
+        if self.entry is None or result is None:
+            return None
+        return self._stalled_since(result, get_no_movement_days(self.entry), now or dt_util.now())
+
+    @staticmethod
+    def _stalled_since(result: TrackingResult, days: int, now: datetime) -> datetime | None:
+        if days <= 0 or not result.success or result.status in ("Not Found", "Error"):
+            return None
+        # Delivered, returned and cancelled shipments are done moving
+        if result.status_category == "delivered" or result.problem in (PROBLEM_RETURNED, PROBLEM_CANCELLED):
+            return None
+        moved = last_movement(result)
+        if moved is None or now - moved < timedelta(days=days):
+            return None
+        return moved
+
+    def _notice_no_movement(self, data: dict[str, TrackingResult]) -> None:
+        """Fire greek_courier_tracker_no_movement once per shipment and latest event."""
+        changed = False
+        for number in [number for number in self._no_movement_sent if number not in self.tracking_configs]:
+            del self._no_movement_sent[number]
+            changed = True
+
+        days = get_no_movement_days(self.entry) if self.entry is not None else 0
+        now = dt_util.now()
+        language = getattr(self.hass.config, "language", None)
+        for number, result in data.items():
+            moved = self._stalled_since(result, days, now)
+            key = self._movement_key(result)
+            if moved is None or number not in self.tracking_configs or self._no_movement_sent.get(number) == key:
+                continue
+            self._no_movement_sent[number] = key
+            changed = True
+            idle = (now - moved).days
+            _LOGGER.info("%s has not moved for %d days", number, idle)
+            self.hass.bus.async_fire(EVENT_NO_MOVEMENT, {
+                **self._shipment_event_data(number, result, language),
+                "days": idle,
+                "last_movement": moved.isoformat(),
+                "text": no_movement_text(idle, language),
+            })
+
+        if changed and self._no_movement_store is not None:
+            self._no_movement_store.async_delay_save(lambda: dict(self._no_movement_sent), 1)
 
     @staticmethod
     def _delivery_date(result: TrackingResult) -> datetime | None:

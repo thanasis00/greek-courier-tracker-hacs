@@ -16,6 +16,7 @@ CONF_AUTO_REMOVE_DELIVERED: Final = "auto_remove_delivered"  # Days after delive
 CONF_STOP_TRACKING_DELIVERED: Final = "stop_tracking_delivered"  # Stop tracking delivered packages
 CONF_KEEP_HISTORY: Final = "keep_history"  # Keep removed shipments as frozen history (shipment_history.py)
 CONF_HISTORY_DAYS: Final = "history_days"  # Days a removed shipment stays in the history
+CONF_NO_MOVEMENT_DAYS: Final = "no_movement_days"  # Days without a new event before a notice
 
 # Default values
 DEFAULT_SCAN_INTERVAL: Final = 15  # minutes per request to a courier
@@ -26,6 +27,8 @@ DEFAULT_AUTO_REMOVE_DELIVERED: Final = 0  # days after delivery, 0 = keep
 DEFAULT_KEEP_HISTORY: Final = False  # removing a shipment deletes it, as in older versions
 DEFAULT_HISTORY_DAYS: Final = 0  # days in the history, 0 = forever
 MAX_HISTORY_DAYS: Final = 3650
+DEFAULT_NO_MOVEMENT_DAYS: Final = 0  # 0 = no notice
+MAX_NO_MOVEMENT_DAYS: Final = 60
 
 # Polling of the couriers (see scheduling.py)
 MAX_COURIER_INTERVAL: Final = 60  # minutes, however many shipments a courier has
@@ -40,6 +43,10 @@ AUTO_DETECT_TIMEOUT: Final = 180  # seconds for one number tried at all couriers
 
 # Fired when the status of a tracked shipment changes
 EVENT_STATUS_CHANGED: Final = "greek_courier_tracker_status_changed"
+# Fired for every new update of a shipment, even one that only changes the place
+EVENT_SHIPMENT_UPDATED: Final = "greek_courier_tracker_shipment_updated"
+# Fired once when a shipment has had no new event for the configured days
+EVENT_NO_MOVEMENT: Final = "greek_courier_tracker_no_movement"
 
 # Dispatcher signals for tracking numbers added/changed without a reload
 SIGNAL_TRACKING_ADDED: Final = "greek_courier_tracker_tracking_added_{entry_id}"

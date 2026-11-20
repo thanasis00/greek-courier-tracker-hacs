@@ -16,7 +16,7 @@ from .const import DOMAIN, SIGNAL_TRACKING_ADDED, SIGNAL_TRACKING_CHANGED
 from .couriers.base import TrackingResult
 from .shipment_history import serialize_events, tracking_url
 from .owners import owner_name
-from .tracking import get_tracking_data, sensor_unique_id, status_text
+from .tracking import get_tracking_data, last_movement, sensor_unique_id, status_text
 from . import GreekCourierDataUpdateCoordinator
 
 
@@ -143,6 +143,7 @@ class GreekCourierTrackingSensor(CoordinatorEntity, SensorEntity):
             return {}
 
         latest = result.latest_event
+        moved = last_movement(result)
         return {
             "tracking_number": result.tracking_number,
             "tracking_name": self._tracking_name,
@@ -160,6 +161,9 @@ class GreekCourierTrackingSensor(CoordinatorEntity, SensorEntity):
             "latest_date": latest.date if latest else None,
             "latest_time": latest.time if latest else None,
             "latest_place": latest.location if latest else None,
+            "last_movement": moved.isoformat() if moved else None,
+            # No new event for the days set in Configure → Settings
+            "stalled": self.coordinator.stalled_since(self._tracking_number) is not None,
             "events": serialize_events(result.events),
             "delivered": result.status_category == "delivered",
             "stop_tracking_delivered": self._stop_tracking_delivered,

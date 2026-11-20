@@ -7,7 +7,7 @@ blueprint:
     in the card or in Configure. Turn on "Only their own shipments" so each
     phone only gets the shipments of the person signed in to the Companion app
     on it. Shared shipments, without an owner, go to every phone.
-    Version 3.
+    Version 4.
   domain: automation
   source_url: https://github.com/thanasis00/greek-courier-tracker-hacs/blob/main/blueprints/automation/greek_courier_tracker/shipment_status_notification.yaml
   input:
@@ -26,6 +26,23 @@ blueprint:
       default: false
       selector:
         boolean:
+    updates:
+      name: Which updates
+      description: >
+        "Status changes" is what earlier versions sent. "Every update" also
+        sends a scan that only changes the place (the parcel moved from one
+        depot to the next). "New stage only" sends created, in transit, out for
+        delivery or ready for pickup, delivered, and problems.
+      default: status
+      selector:
+        select:
+          options:
+            - label: Status changes
+              value: status
+            - label: Every update, even when only the place changes
+              value: every
+            - label: New stage only
+              value: stage
     only_delivered:
       name: Only when delivered
       description: Notify only when a shipment is delivered.
@@ -40,16 +57,31 @@ blueprint:
       default: true
       selector:
         boolean:
+    notify_no_movement:
+      name: When a shipment doesn't move
+      description: >
+        Notify once when a shipment has had no new update for the days set in
+        the integration (Configure → Settings → No movement notice). That
+        setting is off until you pick the days.
+      default: true
+      selector:
+        boolean:
 
 mode: queued
 max: 10
 
 trigger:
   - platform: event
-    event_type: greek_courier_tracker_status_changed
+    event_type: greek_courier_tracker_shipment_updated
+    id: update
+  - platform: event
+    event_type: greek_courier_tracker_no_movement
+    id: no_movement
 
 variables:
+  updates: !input updates
   only_delivered: !input only_delivered
+  notify_no_movement: !input notify_no_movement
   notify_problems: !input notify_problems
   # A new problem (older automations' events have no problem fields)
   new_problem: >-
@@ -65,7 +97,14 @@ variables:
 
 condition:
   - condition: template
-    value_template: "{{ not only_delivered or trigger.event.data.delivered or (notify_problems and new_problem) }}"
+    value_template: >-
+      {%- set data = trigger.event.data -%}
+      {%- if trigger.id == 'no_movement' -%}{{ notify_no_movement }}
+      {%- elif only_delivered -%}{{ data.delivered or (notify_problems and new_problem) }}
+      {%- elif updates == 'every' -%}{{ true }}
+      {%- elif updates == 'stage' -%}{{ data.get('stage_changed', true) or new_problem }}
+      {%- else -%}{{ data.get('status_changed', true) }}
+      {%- endif -%}
 
 action:
   - repeat:
@@ -77,4 +116,4 @@ action:
           data:
             title: "📦 {{ trigger.event.data.name }}"
             message: >
-              {% if trigger.event.data.get('problem_text') %}⚠️ {{ trigger.event.data.problem_text }}: {% endif %}{{ trigger.event.data.status }} ({{ trigger.event.data.courier_name }}{% if trigger.event.data.location %}, {{ trigger.event.data.location }}{% endif %})
+              {% if trigger.id == 'no_movement' %}⏳ {{ trigger.event.data.text }}: {% elif trigger.event.data.get('problem_text') %}⚠️ {{ trigger.event.data.problem_text }}: {% endif %}{{ trigger.event.data.status }} ({{ trigger.event.data.courier_name }}{% if trigger.event.data.location %}, {{ trigger.event.data.location }}{% endif %})

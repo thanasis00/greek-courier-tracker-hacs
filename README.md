@@ -43,7 +43,7 @@ Restart Home Assistant.
 3. Optionally enter your first tracking number (you can add more any time)
 4. Set the minutes between checks per shipment (default and minimum: 15, see [How often couriers are checked](#how-often-couriers-are-checked))
 
-Later, Configure → Settings lets you change the scan interval, remove delivered shipments automatically a number of days after delivery (off by default), and keep removed shipments in a history (see [History of removed shipments](#history-of-removed-shipments)).
+Later, Configure → Settings lets you change the scan interval, remove delivered shipments automatically a number of days after delivery (off by default), keep removed shipments in a history (see [History of removed shipments](#history-of-removed-shipments)), and get a notice when a shipment has had no new update for a number of days (**No movement notice**, off by default; see [Shipments that don't move](#shipments-that-dont-move)).
 
 ### History of removed shipments
 
@@ -123,6 +123,8 @@ type: custom:greek-courier-tracker-card
 
 Each shipment shows its progress in four steps (created → in transit → out for delivery, or ready for pickup at a locker or store → delivered), latest location and time, the expected delivery when the courier gives one (Skroutz Last Mile), and its full history on click. The card follows your Home Assistant language (Greek or English).
 
+When the latest update is a day or more old, the card says how long ago it was ("3 days ago"), and **Checked 10:42** shows when the integration last asked the courier, so you can tell a parcel that waits at a depot from a check that stopped.
+
 When something goes wrong, the step the shipment is at turns orange (a failed delivery attempt, a changed delivery, a shipment on hold) or red (returning or returned to the sender, cancelled, not collected from the locker in time), a note says what happened, and the shipment moves to the top of the list. The progress never goes back: a courier answering with fewer events doesn't undo a step.
 
 | Stage (`stage`) | Meaning |
@@ -201,9 +203,15 @@ When a new version of the integration brings a newer blueprint, **Settings → R
 
 Turn on **Only their own shipments** and each phone only gets the shipments of its owner, the person signed in to the Companion app on it (see [Owners](#owners)). Shared shipments still go to every phone. To mix both, for example only your own shipments on your phone but everything on another, create two automations from the blueprint.
 
-### `greek_courier_tracker_status_changed` event
+The blueprint's **Which updates** picks how much you hear: **Status changes** (the default, as in earlier versions), **Every update** (also a scan that only changes the place, for example when the parcel moves from one depot to the next), or **New stage only** (created, in transit, out for delivery or ready for pickup, delivered, and problems). **When a shipment doesn't move** forwards the [no movement notice](#shipments-that-dont-move), once you set its days.
 
-The integration fires this event whenever a tracked shipment changes status, so your own automations don't need templates:
+### Shipments that don't move
+
+Couriers sometimes don't scan a parcel for days. Set **Configure → Settings → No movement notice after (days)** (0, the default, turns it off) and a shipment with no new update for that many days gets a "No movement for N days" note in the card, and the integration fires `greek_courier_tracker_no_movement` once (again only after a new update and another quiet spell). Delivered, returned and cancelled shipments are left out. The event has the same data as the events below, plus `days`, `last_movement` (ISO time of the latest update) and `text` ("No movement for 3 days", in your Home Assistant language).
+
+### `greek_courier_tracker_status_changed` and `greek_courier_tracker_shipment_updated` events
+
+`greek_courier_tracker_status_changed` fires whenever a tracked shipment changes status. `greek_courier_tracker_shipment_updated` fires for every new update, also when only the place changes (the same "Arrived at" in another depot), and adds `status_changed`, `stage_changed` and `old_stage` to the data below. Your own automations don't need templates:
 
 ```yaml
 alias: Package delivered
@@ -253,6 +261,8 @@ action:
 | `latest_date` | Date of latest event |
 | `latest_time` | Time of latest event |
 | `latest_place` | Location of latest event |
+| `last_movement` | ISO time of the latest event |
+| `stalled` | True when the shipment has had no new update for the days of the no movement notice |
 | `events` | All tracking events |
 | `delivered` | True if package is delivered |
 | `last_updated` | ISO timestamp of last successful API update |

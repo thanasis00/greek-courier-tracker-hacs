@@ -329,4 +329,5 @@ class TestCoordinator:
         coordinator._fire_status_events(
             {"A": _found("A", "in_transit")}, {"A": _found("A", "in_transit", "held")}
         )
-        coordinator.hass.bus.async_fire.assert_called_once()
+        fired = [call.args[0] for call in coordinator.hass.bus.async_fire.call_args_list]
+        assert fired == ["greek_courier_tracker_shipment_updated", "greek_courier_tracker_status_changed"]

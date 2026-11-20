@@ -24,6 +24,7 @@ except ImportError:
 from .const import (
     CONF_AUTO_REMOVE_DELIVERED,
     CONF_HISTORY_DAYS,
+    CONF_NO_MOVEMENT_DAYS,
     CONF_KEEP_HISTORY,
     CONF_LEGACY_SCAN_INTERVAL_HOURS,
     CONF_SCAN_INTERVAL,
@@ -33,11 +34,13 @@ from .const import (
     CONF_COURIER,
     DEFAULT_AUTO_REMOVE_DELIVERED,
     DEFAULT_HISTORY_DAYS,
+    DEFAULT_NO_MOVEMENT_DAYS,
     DEFAULT_KEEP_HISTORY,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_NAME,
     DOMAIN,
     MAX_HISTORY_DAYS,
+    MAX_NO_MOVEMENT_DAYS,
     MAX_SCAN_INTERVAL,
     MIN_SCAN_INTERVAL,
     CourierType,
@@ -353,7 +356,7 @@ class GreekCourierTrackerOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             data = self._options_data(scan_interval=user_input[CONF_SCAN_INTERVAL])
             data[CONF_AUTO_REMOVE_DELIVERED] = user_input.get(CONF_AUTO_REMOVE_DELIVERED, 0)
-            for key in (CONF_KEEP_HISTORY, CONF_HISTORY_DAYS):
+            for key in (CONF_KEEP_HISTORY, CONF_HISTORY_DAYS, CONF_NO_MOVEMENT_DAYS):
                 if key in user_input:
                     data[key] = user_input[key]
             return self.async_create_entry(title="", data=data)
@@ -370,6 +373,10 @@ class GreekCourierTrackerOptionsFlow(config_entries.OptionsFlow):
             vol.Required(CONF_HISTORY_DAYS, default=options.get(CONF_HISTORY_DAYS, DEFAULT_HISTORY_DAYS)): vol.All(
                 vol.Coerce(int), vol.Range(min=0, max=MAX_HISTORY_DAYS)
             ),
+            # A notice (event, card) when a shipment has no new event for these days
+            vol.Required(
+                CONF_NO_MOVEMENT_DAYS, default=options.get(CONF_NO_MOVEMENT_DAYS, DEFAULT_NO_MOVEMENT_DAYS)
+            ): vol.All(vol.Coerce(int), vol.Range(min=0, max=MAX_NO_MOVEMENT_DAYS)),
         })
         return self.async_show_form(step_id="settings", data_schema=schema)
 

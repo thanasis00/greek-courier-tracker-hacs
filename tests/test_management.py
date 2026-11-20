@@ -1125,7 +1125,10 @@ class TestStatusEventsAndCleanup:
             )
 
         devices.assert_called_once_with(hass, "u2")
-        owned, shared = (call.args[1] for call in hass.bus.async_fire.call_args_list)
+        owned, shared = (
+            call.args[1] for call in hass.bus.async_fire.call_args_list
+            if call.args[0] == "greek_courier_tracker_status_changed"
+        )
         assert owned["owner_user_id"] == "u2"
         assert owned["owner"] == "Maria"
         assert owned["owner_device_ids"] == ["maria_phone"]
@@ -1268,32 +1271,48 @@ class TestBlueprint:
         except (ImportError, TypeError):
             # Older Home Assistant validates without a schema argument
             blueprint = Blueprint(load_yaml(str(path)), expected_domain="automation")
-        assert set(blueprint.inputs) == {"notify_device", "only_own", "only_delivered", "notify_problems"}
+        assert set(blueprint.inputs) == {
+            "notify_device", "only_own", "updates", "only_delivered", "notify_problems", "notify_no_movement",
+        }
+        assert blueprint.inputs["updates"]["default"] == "status"
         assert blueprint.inputs["notify_device"]["selector"]["device"]["multiple"] is True
 
-    @pytest.mark.parametrize("only_delivered,notify_problems,data,expected", [
-        (False, True, {"delivered": False}, True),
-        (True, True, {"delivered": True}, True),
-        (True, True, {"delivered": False}, False),
-        # A new problem still comes through, unless turned off
-        (True, True, {"delivered": False, "problem": "attempt_failed", "old_problem": None}, True),
-        (True, False, {"delivered": False, "problem": "attempt_failed", "old_problem": None}, False),
-        # The same problem again, and events of older versions
-        (True, True, {"delivered": False, "problem": "held", "old_problem": "held"}, False),
-        (True, True, {"delivered": False, "problem": None, "old_problem": "held"}, False),
+    @pytest.mark.parametrize("trigger_id,inputs,data,expected", [
+        # Status changes (the default): what earlier versions sent
+        ("update", {}, {"status_changed": True}, True),
+        ("update", {}, {"status_changed": False}, False),
+        # Every update, also when only the place changed
+        ("update", {"updates": "every"}, {"status_changed": False}, True),
+        # New stage only
+        ("update", {"updates": "stage"}, {"status_changed": True, "stage_changed": False}, False),
+        ("update", {"updates": "stage"}, {"stage_changed": True}, True),
+        ("update", {"updates": "stage"}, {"stage_changed": False, "problem": "held", "old_problem": None}, True),
+        # Only when delivered, with or without problems
+        ("update", {"only_delivered": True}, {"delivered": True}, True),
+        ("update", {"only_delivered": True}, {"delivered": False, "status_changed": True}, False),
+        ("update", {"only_delivered": True}, {"delivered": False, "problem": "attempt_failed", "old_problem": None}, True),
+        ("update", {"only_delivered": True, "notify_problems": False},
+         {"delivered": False, "problem": "attempt_failed", "old_problem": None}, False),
+        ("update", {"only_delivered": True}, {"delivered": False, "problem": "held", "old_problem": "held"}, False),
+        # No movement notices, whatever else is picked
+        ("no_movement", {"only_delivered": True}, {"days": 3}, True),
+        ("no_movement", {"notify_no_movement": False}, {"days": 3}, False),
     ])
-    def test_condition(self, only_delivered, notify_problems, data, expected):
+    def test_condition(self, trigger_id, inputs, data, expected):
         """When a notification is sent."""
         import jinja2
         from homeassistant.util.yaml.loader import load_yaml
 
         blueprint = load_yaml(str(self.PATH))
         env = jinja2.Environment()
-        trigger = {"event": {"data": data}}
+        trigger = {"id": trigger_id, "event": {"data": {"delivered": False, **data}}}
+        values = {
+            "updates": "status", "only_delivered": False, "notify_problems": True, "notify_no_movement": True,
+            **inputs,
+        }
         new_problem = env.from_string(blueprint["variables"]["new_problem"]).render(trigger=trigger).strip()
         rendered = env.from_string(blueprint["condition"][0]["value_template"]).render(
-            only_delivered=only_delivered, notify_problems=notify_problems,
-            new_problem=new_problem == "True", trigger=trigger,
+            **values, new_problem=new_problem == "True", trigger=trigger,
         )
         assert rendered.strip() == str(expected)
 

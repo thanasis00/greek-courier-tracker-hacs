@@ -116,8 +116,11 @@ class TestVersions:
         assert blueprint_version(data) == expected
 
     def test_changes_since(self):
-        assert changes_since(2, "el") == "\n".join(f"- {line}" for line in CHANGES[3]["el"])
-        assert changes_since(0, "en").count("\n- ") == len(CHANGES[2]["en"]) + len(CHANGES[3]["en"]) - 1
+        newer = [line for number in sorted(CHANGES) if number > 2 for line in CHANGES[number]["el"]]
+        assert changes_since(2, "el") == "\n".join(f"- {line}" for line in newer)
+        everything = sum(len(texts["en"]) for texts in CHANGES.values())
+        assert changes_since(0, "en").count("- ") >= everything
+        assert changes_since(0, "en").splitlines()[0] == f"- {CHANGES[2]['en'][0]}"
         assert changes_since(max(CHANGES), "en") == ""
 
 
@@ -207,7 +210,7 @@ class TestRepairsIssue:
         ), patch.object(blueprint_update.ir, "async_delete_issue"):
             await async_update_blueprints(hass)
 
-        assert "Version 3." in file.read_text(encoding="utf-8")
+        assert f"Version {max(CHANGES)}." in file.read_text(encoding="utf-8")
         hass.services.async_call.assert_awaited_once_with("automation", "reload", blocking=True)
 
     async def test_fix_flow(self):

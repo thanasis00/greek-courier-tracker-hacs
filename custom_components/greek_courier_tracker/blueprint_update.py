@@ -67,6 +67,22 @@ CHANGES: dict[int, dict[str, list[str]]] = {
             "Όταν κάτι πάει στραβά, το μήνυμα ξεκινά με ⚠️ και τι έγινε.",
         ],
     },
+    4: {
+        "en": [
+            "New option “Which updates”: “Status changes” (as before), “Every update”, which also sends a "
+            "scan that only changes the place (the parcel moved to the next depot), or “New stage only”.",
+            "New option “When a shipment doesn't move” (on): one notification when a shipment has had no "
+            "new update for the days you set in the integration (Configure → Settings, off until you pick "
+            "the days).",
+        ],
+        "el": [
+            "Νέα επιλογή «Which updates»: «Status changes» (όπως πριν), «Every update», που στέλνει και "
+            "σάρωση που αλλάζει μόνο την τοποθεσία (το δέμα πήγε στην επόμενη αποθήκη), ή «New stage only».",
+            "Νέα επιλογή «When a shipment doesn't move» (ενεργή): μία ειδοποίηση όταν μια αποστολή δεν έχει "
+            "νέα ενημέρωση για όσες ημέρες ορίσεις στην integration (Configure → Settings, ανενεργό μέχρι "
+            "να ορίσεις ημέρες).",
+        ],
+    },
 }
 
 
