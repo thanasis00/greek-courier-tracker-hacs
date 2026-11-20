@@ -1,6 +1,7 @@
 {
   "domain": "greek_courier_tracker",
   "name": "Greek Courier Tracker",
+  "after_dependencies": ["blueprint"],
   "codeowners": ["@thanasis00"],
   "config_flow": true,
   "dependencies": ["frontend", "http", "websocket_api"],
