@@ -1,6 +1,6 @@
 # Makefile for Greek Courier Tracker
 
-.PHONY: help build test test-unit test-live test-all test-shell clean rebuild
+.PHONY: help build test test-unit test-live test-all test-shell clean rebuild visual visual-release visual-build
 
 # Default target
 help:
@@ -18,6 +18,8 @@ help:
 	@echo "  test-cov       Run tests with HTML coverage report"
 	@echo "  clean          Remove Docker images and containers"
 	@echo "  rebuild        Rebuild Docker images from scratch"
+	@echo "  visual         Render the card and compare with the last release (before a commit)"
+	@echo "  visual-release Keep the card images of the version in manifest.json (before a release)"
 	@echo ""
 
 # Get directories
@@ -133,3 +135,21 @@ clean:
 # Rebuild from scratch
 rebuild: clean build
 	@echo "✓ Rebuild complete"
+
+# Visual test of the dashboard card (tests/visual): the images and the report
+# stay local (.gitignore)
+VISUAL_IMAGE := greek-courier-tracker-visual:latest
+VISUAL_RUN := docker run --rm --init -v "$(PROJECT_ROOT):/work" -e HOME=/tmp $(VISUAL_IMAGE) python tests/visual/run.py
+
+visual-build:
+	@docker build -q -f tests/visual/Dockerfile -t $(VISUAL_IMAGE) tests/visual >/dev/null
+
+# Before a commit: the working tree against the last release
+visual: visual-build
+	$(VISUAL_RUN)
+	@echo "Open tests/visual/report/index.html to see what changed"
+
+# Before a release (after the version bump): keep the images of this version
+visual-release: visual-build
+	$(VISUAL_RUN) --release
+	@echo "Open tests/visual/report/index.html to see what changed"

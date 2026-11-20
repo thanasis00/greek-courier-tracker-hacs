@@ -1,0 +1,97 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Card visual test</title>
+<style>
+  /* Close to the default Home Assistant theme, light and dark */
+  :root {
+    --primary-color: #03a9f4;
+    --text-primary-color: #ffffff;
+    --primary-text-color: #212121;
+    --secondary-text-color: #727272;
+    --divider-color: rgba(0, 0, 0, 0.12);
+    --card-background-color: #ffffff;
+    --secondary-background-color: #e5e5e5;
+    --success-color: #4caf50;
+    --rgb-success-color: 76, 175, 80;
+    --warning-color: #ff9800;
+    --error-color: #db4437;
+    --page-background: #fafafa;
+    --code-font-family: "DejaVu Sans Mono", monospace;
+  }
+  :root.dark {
+    --primary-text-color: #e1e1e1;
+    --secondary-text-color: #9b9b9b;
+    --divider-color: rgba(225, 225, 225, 0.12);
+    --card-background-color: #1c1c1c;
+    --secondary-background-color: #282828;
+    --page-background: #111111;
+  }
+  html, body { margin: 0; background: var(--page-background); font-family: "DejaVu Sans", sans-serif; font-size: 14px; }
+  #host { padding: 16px; display: inline-block; }
+</style>
+<script>
+  // Stand-ins for the Home Assistant elements the card uses
+  customElements.define("ha-card", class extends HTMLElement {
+    connectedCallback() {
+      Object.assign(this.style, {
+        display: "block",
+        background: "var(--card-background-color)",
+        borderRadius: "12px",
+        border: "1px solid var(--divider-color)",
+        color: "var(--primary-text-color)",
+      });
+    }
+  });
+  // Icons are drawn as boxes of their size, so the layout is the real one
+  customElements.define("ha-icon", class extends HTMLElement {
+    connectedCallback() {
+      Object.assign(this.style, {
+        display: "inline-block",
+        width: "var(--mdc-icon-size, 24px)",
+        height: "var(--mdc-icon-size, 24px)",
+        borderRadius: "3px",
+        background: "currentColor",
+        opacity: "0.35",
+        verticalAlign: "middle",
+        flex: "none",
+      });
+    }
+  });
+</script>
+<script src="../../custom_components/greek_courier_tracker/frontend/greek-courier-tracker-card.js"></script>
+<script src="scenarios.js"></script>
+</head>
+<body>
+<div id="host"></div>
+<script>
+  /** Render one scenario; resolves when the card has drawn it. */
+  window.renderScenario = async (name, theme) => {
+    const scenario = window.SCENARIOS.find((item) => item.name === name);
+    document.documentElement.classList.toggle("dark", theme === "dark");
+    const host = document.getElementById("host");
+    host.innerHTML = "";
+    host.style.width = `${scenario.width}px`;
+
+    const card = document.createElement("greek-courier-tracker-card");
+    card.setConfig(scenario.config || {});
+    host.appendChild(card);
+    card.hass = window.fakeHass(scenario);
+
+    const root = card.shadowRoot;
+    for (const number of scenario.pending || []) {
+      card._pending.set(number, { name: `Νέα αποστολή ${number}`, since: Date.now() });
+    }
+    if (scenario.pending) card._update();
+    // Open every shipment with events, and the history
+    if (scenario.expand) {
+      const ids = [...root.querySelectorAll('[data-action="toggle"]')].map((button) => button.dataset.id);
+      for (const id of ids) root.querySelector(`[data-action="toggle"][data-id="${CSS.escape(id)}"]`)?.click();
+    }
+    if (scenario.historyOpen) root.querySelector('[data-action="history"]')?.click();
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  };
+</script>
+</body>
+</html>

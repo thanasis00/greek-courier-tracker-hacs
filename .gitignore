@@ -36,3 +36,7 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# Visual test of the card: images and report stay local (make visual)
+tests/visual/snapshots/
+tests/visual/report/
