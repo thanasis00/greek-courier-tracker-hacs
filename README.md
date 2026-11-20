@@ -121,7 +121,29 @@ The integration ships its own card; there's nothing else to install. Edit a dash
 type: custom:greek-courier-tracker-card
 ```
 
-Each shipment shows its progress (created → in transit → delivered), latest location and time, the expected delivery when the courier gives one (Skroutz Last Mile), and its full history on click. The card follows your Home Assistant language (Greek or English).
+Each shipment shows its progress in four steps (created → in transit → out for delivery, or ready for pickup at a locker or store → delivered), latest location and time, the expected delivery when the courier gives one (Skroutz Last Mile), and its full history on click. The card follows your Home Assistant language (Greek or English).
+
+When something goes wrong, the step the shipment is at turns orange (a failed delivery attempt, a changed delivery, a shipment on hold) or red (returning or returned to the sender, cancelled, not collected from the locker in time), a note says what happened, and the shipment moves to the top of the list. The progress never goes back: a courier answering with fewer events doesn't undo a step.
+
+| Stage (`stage`) | Meaning |
+|-----------------|---------|
+| `created` | The sender created the voucher; the courier doesn't have the parcel yet |
+| `in_transit` | Picked up, at a hub or between depots |
+| `out_for_delivery` | With the courier on the way to you |
+| `ready_for_pickup` | Waiting for you at a locker or a store |
+| `delivered` | Delivered |
+
+| Problem (`problem`) | Meaning |
+|---------------------|---------|
+| `attempt_failed` | A delivery attempt failed (nobody home, closed, refused) |
+| `rerouted` | The delivery date or address changed |
+| `held` | Held: address issue, customs, kept at the depot |
+| `returning` | On its way back to the sender |
+| `returned` | Back at the sender |
+| `cancelled` | Cancelled |
+| `expired` | Not collected from the locker in time |
+
+Couriers word their updates differently, and not every courier reports every stage (Box Now has no door delivery, for example). A status the integration doesn't recognise yet is logged once at info level (`custom_components.greek_courier_tracker.couriers.base`); please open an issue with it.
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -173,7 +195,9 @@ content: >
 
 [![Open your Home Assistant instance and show the blueprint import dialog with a specific blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fthanasis00%2Fgreek-courier-tracker-hacs%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fgreek_courier_tracker%2Fshipment_status_notification.yaml)
 
-Import the blueprint, pick your phones, and you get a notification whenever a shipment changes status (or only when it's delivered).
+Import the blueprint, pick your phones, and you get a notification whenever a shipment changes status (or only when it's delivered; problems such as a failed delivery attempt still come through unless you turn off **Also when something goes wrong**).
+
+When a new version of the integration brings a newer blueprint, **Settings → Repairs** shows what changed, and **Submit** updates the blueprint you imported and reloads the automations that use it (their settings are kept; edits to the blueprint file itself are replaced).
 
 Turn on **Only their own shipments** and each phone only gets the shipments of its owner, the person signed in to the Companion app on it (see [Owners](#owners)). Shared shipments still go to every phone. To mix both, for example only your own shipments on your phone but everything on another, create two automations from the blueprint.
 
@@ -203,6 +227,9 @@ action:
 | `status_en` | New status in English |
 | `status_category` | delivered, in_transit, created, unknown |
 | `delivered` | True when delivered |
+| `stage` | created, in_transit, out_for_delivery, ready_for_pickup, delivered |
+| `problem`, `old_problem` | New and previous problem (attempt_failed, rerouted, held, returning, returned, cancelled, expired), or empty |
+| `problem_text` | The problem in your Home Assistant language |
 | `location` | Location of the latest event |
 | `estimated_delivery` | Expected delivery, when the courier gives one |
 | `owner`, `owner_user_id` | Name and user ID of the owner (empty for shared shipments) |
@@ -220,6 +247,8 @@ action:
 | `status` | Current status in English |
 | `status_el` | Current status in Greek |
 | `status_category` | delivered, in_transit, created, unknown |
+| `stage` | created, in_transit, out_for_delivery, ready_for_pickup, delivered |
+| `problem` | attempt_failed, rerouted, held, returning, returned, cancelled, expired, or empty |
 | `estimated_delivery` | Expected delivery, when the courier gives one |
 | `latest_date` | Date of latest event |
 | `latest_time` | Time of latest event |

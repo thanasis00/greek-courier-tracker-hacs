@@ -21,6 +21,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.start import async_at_started
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.const import Platform
 from homeassistant.loader import async_get_integration
@@ -49,7 +50,7 @@ from .couriers import (
     is_refused,
     track_with_auto_detect,
 )
-from .couriers.base import BaseCourier, TrackingResult
+from .couriers.base import FINAL_PROBLEMS, STAGE_LEVELS, BaseCourier, TrackingResult, stage_category
 from .shipment_history import (
     ShipmentHistory,
     async_register_websocket,
@@ -58,6 +59,7 @@ from .shipment_history import (
     snapshot,
     worth_keeping,
 )
+from .blueprint_update import async_check_blueprint
 from .owners import owner_device_ids, owner_name
 from .scheduling import CourierSchedule, courier_interval
 from .services import async_setup_services
@@ -65,6 +67,7 @@ from .tracking import (
     get_auto_remove_days,
     get_scan_interval,
     get_tracking_data,
+    problem_text,
     remove_tracking_items,
     save_tracking_data,
     sensor_unique_id,
@@ -95,6 +98,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     async_setup_services(hass)
     async_register_websocket(hass)
     await _async_register_card(hass)
+    # Offer the new notification blueprint to those who imported an older one
+    async_at_started(hass, async_check_blueprint)
     return True
 
 
@@ -304,6 +309,22 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
         async_dispatcher_send(hass, SIGNAL_TRACKING_CHANGED.format(entry_id=entry.entry_id), changes.changed)
 
 
+def _keep_stage(previous: TrackingResult | None, result: TrackingResult) -> None:
+    """Don't let the progress go back when a courier answers with fewer events.
+
+    Returns, cancellations and expiries start the trip back, so they may.
+    """
+    if previous is None or previous.stage is None or result.stage is None:
+        return
+    if result.problem in FINAL_PROBLEMS:
+        return
+    if STAGE_LEVELS[previous.stage] > STAGE_LEVELS[result.stage]:
+        result.stage = previous.stage
+        result.status_category = stage_category(previous.stage)
+        if result.stage == "delivered":
+            result.problem = None
+
+
 @dataclass
 class TrackingChanges:
     """What changed when new tracking options were applied."""
@@ -424,7 +445,13 @@ class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Tracking
     @staticmethod
     def _status_key(result: TrackingResult) -> tuple:
         latest = result.latest_event
-        return (result.status, result.status_category, latest.status if latest else None)
+        return (
+            result.status,
+            result.status_category,
+            result.stage,
+            result.problem,
+            latest.status if latest else None,
+        )
 
     def _fire_status_events(
         self, old_data: dict[str, TrackingResult], new_data: dict[str, TrackingResult]
@@ -459,6 +486,10 @@ class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Tracking
                 "status_en": result.status,
                 "status_category": result.status_category,
                 "delivered": result.status_category == "delivered",
+                "stage": result.stage,
+                "problem": result.problem,
+                "old_problem": old.problem,
+                "problem_text": problem_text(result.problem, language),
                 "location": latest.location if latest else None,
                 "estimated_delivery": result.estimated_delivery,
                 # Shared shipments have no owner (and None instead of a phone list)
@@ -735,6 +766,7 @@ class GreekCourierDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Tracking
             else:
                 # Success - update with new data and add timestamp
                 result.last_updated = datetime.now(timezone.utc).isoformat()
+                _keep_stage(new_data.get(number), result)
                 new_data[number] = result
 
         _LOGGER.debug("Update complete: %d results", len(new_data))

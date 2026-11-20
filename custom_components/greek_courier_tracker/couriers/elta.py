@@ -9,7 +9,16 @@ import aiohttp
 import async_timeout
 
 from ..const import CourierType
-from .base import BaseCourier, TrackingEvent, TrackingResult
+from .base import (
+    STAGE_CREATED,
+    STAGE_IN_TRANSIT,
+    STAGE_OUT_FOR_DELIVERY,
+    STAGE_READY_FOR_PICKUP,
+    BaseCourier,
+    TrackingEvent,
+    TrackingResult,
+    stage_category,
+)
 
 
 class ELTACourier(BaseCourier):
@@ -37,6 +46,19 @@ class ELTACourier(BaseCourier):
         "Δημιουργία ΣΥ.ΔΕ.ΤΑ.": "Shipment Created",
         "Παραλαβή από": "Picked up by",
     }
+
+    # ELTA's own phrases (problems such as "Απουσία παραλήπτη" are common rules)
+    STATUS_RULES = [
+        ("συ.δε.τα", STAGE_CREATED, None),
+        ("βρισκεται στο καταστημα", STAGE_READY_FOR_PICKUP, None),
+        ("δυνατοτητα παραλαβης", STAGE_READY_FOR_PICKUP, None),
+        ("σε διανομεα", STAGE_OUT_FOR_DELIVERY, None),
+        ("σταδιο μεταφορας", STAGE_IN_TRANSIT, None),
+        ("παραλαβη αποστολης", STAGE_IN_TRANSIT, None),
+        ("παραλαβη απο", STAGE_IN_TRANSIT, None),
+        ("καταστημα", STAGE_IN_TRANSIT, None),
+        ("διανομ", STAGE_IN_TRANSIT, None),
+    ]
 
     async def track(self, tracking_number: str) -> TrackingResult:
         """Track an ELTA shipment."""
@@ -139,30 +161,23 @@ class ELTACourier(BaseCourier):
             
             latest = events[0] if events else None
             status = latest.status_translated if latest else "Unknown"
-            category = self.get_status_category(
-                status,
-                ["παραδόθηκε", "delivered"],
-                # "Σε διανομέα προς παράδοση", "Άφιξη σε", "...στο κατάστημα",
-                # "Απουσία παραλήπτη" all mean the parcel is on its way.
-                ["μεταφοράς", "transit", "διανομ", "άφιξη", "κατάστημα",
-                 "απουσία", "παραλαβή αποστολής", "picked up"],
-                ["δημιουργία", "created", "συ.δε.τα."]
-            )
-            # ELTA has more phrases than we know; once the parcel has more
-            # than one scan it has left the sender, so never fall back to 0.
-            if category == "unknown" and events:
-                category = "in_transit" if len(events) > 1 else "created"
-            
+            # ELTA has more phrases than we know; once the parcel has more than
+            # one scan it has left the sender (see BaseCourier.progress)
+            self.classify_events(events)
+            stage, problem = self.progress(events)
+
             return TrackingResult(
                 success=True,
                 tracking_number=tracking_number,
                 courier=self.COURIER_CODE,
                 courier_name=self.COURIER_NAME,
                 status=status,
-                status_category=category,
+                status_category=stage_category(stage),
                 events=events,
                 latest_event=latest,
                 raw_data=data,
+                stage=stage,
+                problem=problem,
             )
         
         elif tracking_data.get("status") == 2:

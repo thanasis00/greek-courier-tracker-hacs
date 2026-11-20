@@ -73,7 +73,7 @@ class TestSnapshot:
         assert item["latest_place"] == "ΑΘΗΝΑ"
         assert item["events"] == [{
             "date": "2026-11-18", "time": "10:30", "location": "ΑΘΗΝΑ", "status": "Παραδόθηκε",
-            "status_translated": None,
+            "status_translated": None, "stage": None, "problem": None,
         }]
         assert item["removed_at"] == "2026-11-19T12:00:00+00:00"
         # Stored as JSON in .storage

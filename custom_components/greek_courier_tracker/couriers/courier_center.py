@@ -10,7 +10,18 @@ import async_timeout
 from bs4 import BeautifulSoup
 
 from ..const import CourierType
-from .base import BaseCourier, TrackingEvent, TrackingResult
+from .base import (
+    PROBLEM_RETURNING,
+    STAGE_CREATED,
+    STAGE_DELIVERED,
+    STAGE_IN_TRANSIT,
+    STAGE_OUT_FOR_DELIVERY,
+    BaseCourier,
+    TrackingEvent,
+    TrackingResult,
+    higher_stage,
+    stage_category,
+)
 
 
 class CourierCenterCourier(BaseCourier):
@@ -37,8 +48,13 @@ class CourierCenterCourier(BaseCourier):
         "ReturnBackToShipper": "Returning to Sender",
         "None": "Shipment Created",
     }
-    DELIVERED_STATUSES = {"DeliveryCompleted"}
     CREATED_STATUSES = {"NewShipment", "None", ""}
+    # Status codes that say more than "on its way": (stage, problem)
+    CODE_STAGES = {
+        "DeliveryCompleted": (STAGE_DELIVERED, None),
+        "OutForDelivery": (STAGE_OUT_FOR_DELIVERY, None),
+        "ReturnBackToShipper": (None, PROBLEM_RETURNING),
+    }
 
     # A receipt number can list several waybills; older ones belong to past orders
     MAX_LIST_AGE = timedelta(days=60)
@@ -143,12 +159,21 @@ class CourierCenterCourier(BaseCourier):
         events.sort(key=lambda event: self._event_key(event), reverse=True)
         latest = events[0] if events else None
 
-        if status_code in self.DELIVERED_STATUSES:
-            category = "delivered"
-        elif status_code in self.CREATED_STATUSES and len(events) <= 1:
-            category = "created"
+        self.classify_events(events)
+        stage, problem = self.progress(events)
+
+        # The status code is the current one, the events may lag behind
+        if status_code in self.CREATED_STATUSES and len(events) <= 1:
+            code_stage, code_problem = STAGE_CREATED, None
         else:
-            category = "in_transit"
+            code_stage, code_problem = self.CODE_STAGES.get(status_code, (STAGE_IN_TRANSIT, None))
+        if code_problem:
+            problem = code_problem
+            stage = STAGE_OUT_FOR_DELIVERY if stage == STAGE_DELIVERED else stage
+        else:
+            stage = code_stage if code_stage == STAGE_CREATED else higher_stage(stage, code_stage)
+            if stage == STAGE_DELIVERED:
+                problem = None
 
         status = self.STATUS_TRANSLATIONS.get(status_code) or self._humanize(status_code)
 
@@ -158,10 +183,12 @@ class CourierCenterCourier(BaseCourier):
             courier=self.COURIER_CODE,
             courier_name=self.COURIER_NAME,
             status=status,
-            status_category=category,
+            status_category=stage_category(stage),
             events=events,
             latest_event=latest,
             status_el=latest.status if latest else None,
+            stage=stage,
+            problem=problem,
         )
 
     @staticmethod

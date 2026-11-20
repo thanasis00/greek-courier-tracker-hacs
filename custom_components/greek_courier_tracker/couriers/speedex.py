@@ -11,7 +11,16 @@ import async_timeout
 from bs4 import BeautifulSoup
 
 from ..const import CourierType
-from .base import BaseCourier, TrackingEvent, TrackingResult
+from .base import (
+    FINAL_PROBLEMS,
+    STAGE_CREATED,
+    STAGE_DELIVERED,
+    STAGE_IN_TRANSIT,
+    BaseCourier,
+    TrackingEvent,
+    TrackingResult,
+    stage_category,
+)
 
 
 class SpeedExCourier(BaseCourier):
@@ -44,8 +53,17 @@ class SpeedExCourier(BaseCourier):
         "ΑΠΟΣΤΟΛΗ": "Shipped",
     }
 
-    # The sender has created the voucher but not handed the parcel over yet
-    CREATED_KEYWORDS = ["αναμονη αναθεσης"]
+    # SpeedEx's own phrases (matched without Greek accents); "ΑΝΑΜΟΝΗ ΑΝΑΘΕΣΗΣ" is
+    # a voucher the sender hasn't handed over yet
+    STATUS_RULES = [
+        ("αναμονη αναθεσης", STAGE_CREATED, None),
+        ("παραλαβη", STAGE_IN_TRANSIT, None),
+        ("δ/κ", STAGE_IN_TRANSIT, None),
+        ("εισαγωγη", STAGE_IN_TRANSIT, None),
+        ("εξαγωγη", STAGE_IN_TRANSIT, None),
+    ]
+    # Anything else on the timeline means the parcel is on its way
+    FALLBACK_STAGE = STAGE_IN_TRANSIT
 
     DATE_TIME = re.compile(r"(\d{1,2}/\d{1,2}/\d{4})(?:\s*στις\s*(\d{1,2}:\d{2}))?")
     PHONE = re.compile(r"^[\d\s+()-]+$")
@@ -153,16 +171,23 @@ class SpeedExCourier(BaseCourier):
         
         latest = events[0] if events else None
         status = latest.status_translated if latest else "Unknown"
-        
+        self.classify_events(events)
+        stage, problem = self.progress(events)
+        # The website colours the delivery event with "delivered-speedex"
+        if events and soup.find(class_="delivered-speedex") and problem not in FINAL_PROBLEMS:
+            stage, problem = STAGE_DELIVERED, None
+
         return TrackingResult(
             success=True,
             tracking_number=tracking_number,
             courier=self.COURIER_CODE,
             courier_name=self.COURIER_NAME,
             status=status,
-            status_category=self._get_category(soup, events),
+            status_category=stage_category(stage),
             events=events,
             latest_event=latest,
+            stage=stage,
+            problem=problem,
         )
 
     def _parse_card_info(self, card: Any) -> tuple[str, str, str]:
@@ -193,17 +218,3 @@ class SpeedExCourier(BaseCourier):
             return datetime.strptime(f"{event.date} {event.time or '00:00'}", "%d/%m/%Y %H:%M")
         except ValueError:
             return datetime.min
-
-    def _get_category(self, soup: BeautifulSoup, events: list[TrackingEvent]) -> str:
-        """Determine the status category from all the events."""
-        if not events:
-            return "unknown"
-        statuses = [self._normalize(event.status) for event in events]
-        # The website colours the delivery event with "delivered-speedex"
-        if soup.find(class_="delivered-speedex") or any(
-            "παραδοθηκε" in status and "δεν " not in status for status in statuses
-        ):
-            return "delivered"
-        if all(any(keyword in status for keyword in self.CREATED_KEYWORDS) for status in statuses):
-            return "created"
-        return "in_transit"

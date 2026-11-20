@@ -7,6 +7,7 @@ blueprint:
     in the card or in Configure. Turn on "Only their own shipments" so each
     phone only gets the shipments of the person signed in to the Companion app
     on it. Shared shipments, without an owner, go to every phone.
+    Version 3.
   domain: automation
   source_url: https://github.com/thanasis00/greek-courier-tracker-hacs/blob/main/blueprints/automation/greek_courier_tracker/shipment_status_notification.yaml
   input:
@@ -31,6 +32,14 @@ blueprint:
       default: false
       selector:
         boolean:
+    notify_problems:
+      name: Also when something goes wrong
+      description: >
+        With "Only when delivered" on, still notify when a delivery attempt
+        fails, the shipment is returned or cancelled, or the delivery changes.
+      default: true
+      selector:
+        boolean:
 
 mode: queued
 max: 10
@@ -41,6 +50,11 @@ trigger:
 
 variables:
   only_delivered: !input only_delivered
+  notify_problems: !input notify_problems
+  # A new problem (older automations' events have no problem fields)
+  new_problem: >-
+    {{ trigger.event.data.get('problem') is not none
+       and trigger.event.data.get('problem') != trigger.event.data.get('old_problem') }}
   only_own: !input only_own
   phones: !input notify_device
   # Automations made before several phones were allowed hold a single device
@@ -51,7 +65,7 @@ variables:
 
 condition:
   - condition: template
-    value_template: "{{ not only_delivered or trigger.event.data.delivered }}"
+    value_template: "{{ not only_delivered or trigger.event.data.delivered or (notify_problems and new_problem) }}"
 
 action:
   - repeat:
@@ -63,4 +77,4 @@ action:
           data:
             title: "📦 {{ trigger.event.data.name }}"
             message: >
-              {{ trigger.event.data.status }} ({{ trigger.event.data.courier_name }}{% if trigger.event.data.location %}, {{ trigger.event.data.location }}{% endif %})
+              {% if trigger.event.data.get('problem_text') %}⚠️ {{ trigger.event.data.problem_text }}: {% endif %}{{ trigger.event.data.status }} ({{ trigger.event.data.courier_name }}{% if trigger.event.data.location %}, {{ trigger.event.data.location }}{% endif %})

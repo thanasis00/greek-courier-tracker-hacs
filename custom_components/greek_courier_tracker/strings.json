@@ -191,5 +191,18 @@
         }
       }
     }
+  },
+  "issues": {
+    "blueprint_outdated": {
+      "title": "New version of the shipment notification blueprint",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Update the shipment notification blueprint",
+            "description": "Version {version} of the blueprint “Greek Courier Tracker - shipment updates” is out. You have an older one: {files}.\n\n**What changes:**\n{changes}\n\nSubmit replaces the blueprint with the new version and reloads the automations that use it. Their settings stay as they are. Changes you made to the blueprint file itself will be lost."
+          }
+        }
+      }
+    }
   }
 }

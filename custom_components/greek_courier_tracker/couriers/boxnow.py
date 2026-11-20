@@ -11,7 +11,20 @@ import aiohttp
 import async_timeout
 
 from ..const import CourierType
-from .base import BaseCourier, TrackingEvent, TrackingResult
+from .base import (
+    PROBLEM_CANCELLED,
+    PROBLEM_EXPIRED,
+    PROBLEM_RETURNED,
+    STAGE_CREATED,
+    STAGE_DELIVERED,
+    STAGE_IN_TRANSIT,
+    STAGE_READY_FOR_PICKUP,
+    BaseCourier,
+    TrackingEvent,
+    TrackingResult,
+    higher_stage,
+    stage_category,
+)
 
 
 class BoxNowCourier(BaseCourier):
@@ -39,7 +52,28 @@ class BoxNowCourier(BaseCourier):
         "in-final-destination": "At Destination Locker",
         "delivered": "Delivered",
         "expired": "Expired",
+        "expired-return": "Expired",
         "returned": "Returned",
+        "cancelled": "Cancelled",
+        "cancelled-return": "Cancelled",
+        "wait-for-load": "Awaiting Courier Collection",
+    }
+
+    # Event types of the BOX NOW webhook guide: (stage, problem)
+    EVENT_STAGES = {
+        "new": (STAGE_CREATED, None),
+        "accepted-to-locker": (STAGE_IN_TRANSIT, None),
+        "wait-for-load": (STAGE_IN_TRANSIT, None),
+        "in-depot": (STAGE_IN_TRANSIT, None),
+        "in-transit": (STAGE_IN_TRANSIT, None),
+        "final-destination": (STAGE_READY_FOR_PICKUP, None),
+        "in-final-destination": (STAGE_READY_FOR_PICKUP, None),
+        "delivered": (STAGE_DELIVERED, None),
+        "expired": (None, PROBLEM_EXPIRED),
+        "expired-return": (None, PROBLEM_EXPIRED),
+        "returned": (None, PROBLEM_RETURNED),
+        "cancelled": (None, PROBLEM_CANCELLED),
+        "cancelled-return": (None, PROBLEM_CANCELLED),
     }
 
     TIMEZONE = ZoneInfo("Europe/Athens")
@@ -126,7 +160,8 @@ class BoxNowCourier(BaseCourier):
             date_part, time_part = self._local_date_time(event.get("createTime", ""))
 
             event_type = event.get("type", "")
-            
+            stage, problem = self.EVENT_STAGES.get(event_type, (None, None))
+
             events.append(TrackingEvent(
                 date=date_part,
                 time=time_part,
@@ -135,6 +170,8 @@ class BoxNowCourier(BaseCourier):
                 status_translated=self.EVENT_TRANSLATIONS.get(
                     event_type, event_type
                 ),
+                stage=stage,
+                problem=problem,
             ))
         
         # The API returns events oldest first; keep newest first like the other couriers
@@ -143,24 +180,30 @@ class BoxNowCourier(BaseCourier):
         state = parcel.get("state", "")
         status = self.EVENT_TRANSLATIONS.get(state, state)
         
-        category = "delivered" if state == "delivered" else self.get_status_category(
-            status,
-            ["delivered"],
-            ["depot", "destination", "transit", "locker"],
-            ["new"]
-        )
-        
+        # The parcel state is the current one, the events may lag behind
+        stage, problem = self.progress(events)
+        state_stage, state_problem = self.EVENT_STAGES.get(state, (None, None))
+        if state_problem:
+            problem = state_problem
+            stage = STAGE_READY_FOR_PICKUP if stage == STAGE_DELIVERED else stage or STAGE_CREATED
+        else:
+            stage = higher_stage(stage, state_stage)
+            if stage == STAGE_DELIVERED:
+                problem = None
+
         return TrackingResult(
             success=True,
             tracking_number=tracking_number,
             courier=self.COURIER_CODE,
             courier_name=self.COURIER_NAME,
             status=status,
-            status_category=category,
+            status_category=stage_category(stage),
             events=events,
             latest_event=latest,
             raw_data=data,
             estimated_delivery=self._estimated_delivery(parcel, state),
+            stage=stage,
+            problem=problem,
         )
 
     def _local_date_time(self, timestamp: str) -> tuple[str, str]:

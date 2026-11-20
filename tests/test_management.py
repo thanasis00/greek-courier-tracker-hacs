@@ -1268,8 +1268,34 @@ class TestBlueprint:
         except (ImportError, TypeError):
             # Older Home Assistant validates without a schema argument
             blueprint = Blueprint(load_yaml(str(path)), expected_domain="automation")
-        assert set(blueprint.inputs) == {"notify_device", "only_own", "only_delivered"}
+        assert set(blueprint.inputs) == {"notify_device", "only_own", "only_delivered", "notify_problems"}
         assert blueprint.inputs["notify_device"]["selector"]["device"]["multiple"] is True
+
+    @pytest.mark.parametrize("only_delivered,notify_problems,data,expected", [
+        (False, True, {"delivered": False}, True),
+        (True, True, {"delivered": True}, True),
+        (True, True, {"delivered": False}, False),
+        # A new problem still comes through, unless turned off
+        (True, True, {"delivered": False, "problem": "attempt_failed", "old_problem": None}, True),
+        (True, False, {"delivered": False, "problem": "attempt_failed", "old_problem": None}, False),
+        # The same problem again, and events of older versions
+        (True, True, {"delivered": False, "problem": "held", "old_problem": "held"}, False),
+        (True, True, {"delivered": False, "problem": None, "old_problem": "held"}, False),
+    ])
+    def test_condition(self, only_delivered, notify_problems, data, expected):
+        """When a notification is sent."""
+        import jinja2
+        from homeassistant.util.yaml.loader import load_yaml
+
+        blueprint = load_yaml(str(self.PATH))
+        env = jinja2.Environment()
+        trigger = {"event": {"data": data}}
+        new_problem = env.from_string(blueprint["variables"]["new_problem"]).render(trigger=trigger).strip()
+        rendered = env.from_string(blueprint["condition"][0]["value_template"]).render(
+            only_delivered=only_delivered, notify_problems=notify_problems,
+            new_problem=new_problem == "True", trigger=trigger,
+        )
+        assert rendered.strip() == str(expected)
 
     @pytest.mark.parametrize("phones,only_own,data,expected", [
         # Every phone, unless only their own shipments are wanted

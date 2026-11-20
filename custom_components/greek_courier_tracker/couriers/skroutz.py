@@ -10,7 +10,18 @@ import aiohttp
 import async_timeout
 
 from ..const import CourierType
-from .base import BaseCourier, TrackingEvent, TrackingResult
+from .base import (
+    PROBLEM_CANCELLED,
+    STAGE_CREATED,
+    STAGE_DELIVERED,
+    STAGE_IN_TRANSIT,
+    STAGE_OUT_FOR_DELIVERY,
+    BaseCourier,
+    TrackingEvent,
+    TrackingResult,
+    higher_stage,
+    stage_category,
+)
 
 
 class SkroutzCourier(BaseCourier):
@@ -132,7 +143,9 @@ class SkroutzCourier(BaseCourier):
                 status_translated=event.get("description_en") or status_gr,
             ))
 
+        self.classify_events(events)
         latest = events[0] if events else None
+        stage, problem = self._progress(data, events)
         status = (
             data.get("statusTextEn")
             or data.get("statusTextGr")
@@ -147,12 +160,14 @@ class SkroutzCourier(BaseCourier):
             courier=self.COURIER_CODE,
             courier_name=self.COURIER_NAME,
             status=status,
-            status_category=self._get_category(data),
+            status_category=stage_category(stage),
             events=events,
             latest_event=latest,
             raw_data=data,
             estimated_delivery=self._estimated_delivery(data),
             status_el=data.get("statusTextGr") or None,
+            stage=stage,
+            problem=problem,
         )
 
     def _estimated_delivery(self, data: dict[str, Any]) -> str | None:
@@ -169,15 +184,26 @@ class SkroutzCourier(BaseCourier):
                 return str(data[key])
         return None
 
-    def _get_category(self, data: dict[str, Any]) -> str:
-        """Determine the status category from the shipment timestamps."""
+    def _progress(self, data: dict[str, Any], events: list[TrackingEvent]) -> tuple[str | None, str | None]:
+        """Stage and problem: the shipment timestamps first, then its status and events."""
+        stage, problem = self.progress(events)
+        # The status ("created", "picked_up", ...) and its texts describe the current state
+        status_stage, status_problem = self.classify(
+            str(data.get("status") or "").replace("_", " "), data.get("statusTextEn"), data.get("statusTextGr")
+        )
+        stage = higher_stage(stage, status_stage)
+        problem = status_problem or problem
+
         if data.get("deliveredAt") or data.get("status") == "delivered":
-            return "delivered"
+            return STAGE_DELIVERED, None
         if data.get("isCompleteCancelled"):
-            return "unknown"
+            return stage or STAGE_CREATED, PROBLEM_CANCELLED
         if data.get("pickedUpAt"):
-            return "in_transit"
-        return "created"
+            stage = higher_stage(stage, STAGE_IN_TRANSIT)
+        if stage == STAGE_DELIVERED:
+            # Only the timestamps above say it was delivered
+            stage = STAGE_OUT_FOR_DELIVERY
+        return stage or STAGE_CREATED, problem
 
     def _split_timestamp(self, timestamp: str) -> tuple[str, str]:
         """Convert an ISO UTC timestamp to local (Athens) date and time strings."""

@@ -71,6 +71,8 @@ def serialize_events(events: list[TrackingEvent]) -> list[dict[str, Any]]:
             "location": event.location,
             "status": event.status,
             "status_translated": event.status_translated,
+            "stage": event.stage,
+            "problem": event.problem,
         }
         for event in events
     ]
@@ -95,6 +97,8 @@ def snapshot(config: dict[str, Any], result: TrackingResult, removed_at: datetim
         "status": result.status,
         "status_el": status_text(result, "el"),
         "status_category": result.status_category,
+        "stage": result.stage,
+        "problem": result.problem,
         "delivered": result.status_category == "delivered",
         "estimated_delivery": result.estimated_delivery,
         "latest_date": latest.date if latest else None,

@@ -9,7 +9,14 @@ import aiohttp
 import async_timeout
 
 from ..const import CourierType
-from .base import BaseCourier, TrackingEvent, TrackingResult
+from .base import (
+    STAGE_CREATED,
+    STAGE_IN_TRANSIT,
+    BaseCourier,
+    TrackingEvent,
+    TrackingResult,
+    stage_category,
+)
 
 
 class SvuumCourier(BaseCourier):
@@ -40,10 +47,18 @@ class SvuumCourier(BaseCourier):
         "S210": "Received at Svuum Central Warehouse",
     }
 
-    # Keywords are matched against lowercase text without Greek accents
-    FAILED_KEYWORDS = ["ανεπιτυχ", "αποτυχ", "failed"]
-    DELIVERED_KEYWORDS = ["παραδοθηκε", "επιτυχης παραδοση", "delivered"]
-    CREATED_KEYWORDS = ["eshop", "e-shop", "δημιουργ", "καταχωρ"]
+    # Svuum's own phrases (failures such as "Ανεπιτυχής Παράδοση" are common rules,
+    # checked before "Επιτυχής Παράδοση")
+    STATUS_RULES = [
+        ("eshop", STAGE_CREATED, None),
+        ("e-shop", STAGE_CREATED, None),
+        ("καταχωρ", STAGE_CREATED, None),
+        ("αποθηκη", STAGE_IN_TRANSIT, None),
+    ]
+    # Status codes that say how far the parcel got
+    CODE_STAGES = {"S010": STAGE_CREATED, "S210": STAGE_IN_TRANSIT}
+    # Anything else on the timeline means the parcel is on its way
+    FALLBACK_STAGE = STAGE_IN_TRANSIT
 
     MONTHS = {
         "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
@@ -139,20 +154,23 @@ class SvuumCourier(BaseCourier):
         for event in parcel.get("processTimeLineLogsList", []):
             status = (event.get("status") or "").strip()
             date_part, time_part = self._parse_status_time(event.get("statusTime") or "")
+            code = event.get("statusCode", "")
 
-            events.append(TrackingEvent(
+            item = TrackingEvent(
                 date=date_part,
                 time=time_part,
                 location="",
                 status=status,
-                status_translated=self.STATUS_CODE_TRANSLATIONS.get(
-                    event.get("statusCode", ""), status
-                ),
-            ))
+                status_translated=self.STATUS_CODE_TRANSLATIONS.get(code, status),
+            )
+            item.stage, item.problem = self.classify(item.status, item.status_translated)
+            if item.problem is None and code in self.CODE_STAGES:
+                item.stage = self.CODE_STAGES[code]
+            events.append(item)
 
         latest = events[0] if events else None
         status = latest.status_translated if latest else "Unknown"
-        status_code = (parcel.get("processTimeLineLogsList") or [{}])[0].get("statusCode", "")
+        stage, problem = self.progress(events)
 
         return TrackingResult(
             success=True,
@@ -160,28 +178,14 @@ class SvuumCourier(BaseCourier):
             courier=self.COURIER_CODE,
             courier_name=self.COURIER_NAME,
             status=status,
-            status_category=self._get_category(latest, status_code),
+            status_category=stage_category(stage),
             events=events,
             latest_event=latest,
             raw_data={"data": data},
             status_el=latest.status if latest else None,
+            stage=stage,
+            problem=problem,
         )
-
-    def _get_category(self, latest: TrackingEvent | None, status_code: str) -> str:
-        """Determine the status category from the latest event."""
-        if latest is None:
-            return "unknown"
-
-        text = self._normalize(f"{latest.status} {latest.status_translated or ''}")
-
-        # "Ανεπιτυχής παράδοση" contains "επιτυχής παράδοση", so check failures first
-        if any(keyword in text for keyword in self.FAILED_KEYWORDS):
-            return "in_transit"
-        if any(keyword in text for keyword in self.DELIVERED_KEYWORDS):
-            return "delivered"
-        if status_code == "S010" or any(keyword in text for keyword in self.CREATED_KEYWORDS):
-            return "created"
-        return "in_transit"
 
     def _parse_status_time(self, status_time: str) -> tuple[str, str]:
         """Parse FarEye time ("Oct-19-2026 05:40 PM") into date and 24h time."""

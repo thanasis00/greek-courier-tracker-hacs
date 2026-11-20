@@ -42,7 +42,40 @@ STATUS_TEXT_EL = {
     "New Shipment": "Νέα αποστολή",
     "Out for Delivery": "Προς παράδοση",
     "Returning to Sender": "Επιστρέφει στον αποστολέα",
+    "Cancelled": "Ακυρώθηκε",
+    "Awaiting Courier Collection": "Αναμονή παραλαβής από τον courier",
 }
+
+
+# What went wrong (TrackingResult.problem), for notifications
+PROBLEM_TEXT = {
+    "en": {
+        "attempt_failed": "Delivery attempt failed",
+        "rerouted": "Delivery changed",
+        "held": "On hold",
+        "returning": "Returning to sender",
+        "returned": "Returned to sender",
+        "cancelled": "Cancelled",
+        "expired": "Not collected in time",
+    },
+    "el": {
+        "attempt_failed": "Αποτυχημένη απόπειρα παράδοσης",
+        "rerouted": "Αλλαγή παράδοσης",
+        "held": "Σε αναμονή",
+        "returning": "Επιστρέφει στον αποστολέα",
+        "returned": "Επιστράφηκε στον αποστολέα",
+        "cancelled": "Ακυρώθηκε",
+        "expired": "Δεν παραλήφθηκε εγκαίρως",
+    },
+}
+
+
+def problem_text(problem: str | None, language: str | None) -> str | None:
+    """Return a problem in Greek for a Greek Home Assistant, else in English."""
+    if not problem:
+        return None
+    lang = "el" if (language if isinstance(language, str) else "").lower().startswith("el") else "en"
+    return PROBLEM_TEXT[lang].get(problem, problem)
 
 
 class TrackingNumberExistsError(ValueError):

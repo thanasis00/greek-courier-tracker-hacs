@@ -10,7 +10,17 @@ import aiohttp
 import async_timeout
 
 from ..const import CourierType
-from .base import BaseCourier, TrackingEvent, TrackingResult
+from .base import (
+    PROBLEM_RETURNED,
+    PROBLEM_RETURNING,
+    STAGE_CREATED,
+    STAGE_DELIVERED,
+    STAGE_IN_TRANSIT,
+    BaseCourier,
+    TrackingEvent,
+    TrackingResult,
+    stage_category,
+)
 
 
 class ACSCourier(BaseCourier):
@@ -40,6 +50,13 @@ class ACSCourier(BaseCourier):
         "Η αποστολή βρίσκεται σε διάκριση": "In Transit",
         "Η αποστολή δεν βρέθηκε": "Not Found",
     }
+
+    # The first scan is "Η αποστολή παρελήφθη" (picked up from the sender)
+    STATUS_RULES = [
+        ("παρεληφθη", STAGE_CREATED, None),
+        ("received", STAGE_CREATED, None),
+        ("διακριση", STAGE_IN_TRANSIT, None),
+    ]
 
     # Shared by all instances: one token serves every request for a while
     _token: str | None = None
@@ -211,18 +228,22 @@ class ACSCourier(BaseCourier):
         # Keep newest first like the other couriers
         events.sort(key=lambda event: (event.date, event.time or ""), reverse=True)
         latest = events[0]
-        is_delivered = parcel.get("isDelivered", False)
+        self.classify_events(events)
+        stage, problem = self.progress(events)
 
-        status = "Delivered" if is_delivered else latest.status_translated or latest.status
-        category = "delivered" if is_delivered else self.get_status_category(
-            status,
-            ["παραδόθηκε", "delivered"],
-            ["διάκριση", "transit"],
-            ["παρελήφθη", "received"]
-        )
-        # Anything past the first scan is on its way
-        if category == "unknown":
-            category = "in_transit" if len(events) > 1 else "created"
+        # The parcel flags are more reliable than the texts
+        is_delivered = bool(parcel.get("isDelivered"))
+        if parcel.get("isReturned"):
+            # Delivered while returned means delivered back to the sender
+            problem = PROBLEM_RETURNED if is_delivered else PROBLEM_RETURNING
+            if stage == STAGE_DELIVERED:
+                stage = STAGE_IN_TRANSIT
+            status = "Returned" if is_delivered else "Returning to Sender"
+        elif is_delivered:
+            stage, problem = STAGE_DELIVERED, None
+            status = "Delivered"
+        else:
+            status = latest.status_translated or latest.status
 
         return TrackingResult(
             success=True,
@@ -230,8 +251,19 @@ class ACSCourier(BaseCourier):
             courier=self.COURIER_CODE,
             courier_name=self.COURIER_NAME,
             status=status,
-            status_category=category,
+            status_category=stage_category(stage),
             events=events,
             latest_event=latest,
             raw_data=data,
+            estimated_delivery=self._estimated_delivery(parcel, stage),
+            stage=stage,
+            problem=problem,
         )
+
+    @staticmethod
+    def _estimated_delivery(parcel: dict[str, Any], stage: str | None) -> str | None:
+        """The expected delivery day ACS gives, until the parcel is delivered."""
+        expected = parcel.get("expectedDeliveryDate")
+        if stage == STAGE_DELIVERED or not isinstance(expected, str) or not expected:
+            return None
+        return expected.split("T")[0]

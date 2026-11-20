@@ -154,6 +154,8 @@ class GreekCourierTrackingSensor(CoordinatorEntity, SensorEntity):
             "status": result.status,
             "status_el": status_text(result, "el"),
             "status_category": result.status_category,
+            "stage": result.stage,
+            "problem": result.problem,
             "estimated_delivery": result.estimated_delivery,
             "latest_date": latest.date if latest else None,
             "latest_time": latest.time if latest else None,

@@ -67,6 +67,23 @@ const STRINGS = {
     copied: "Tracking number copied",
     copy_failed: "Couldn't copy the tracking number",
     open_site: (courier) => `Track on the ${courier || "courier's"} website`,
+    stages: {
+      created: "Created",
+      in_transit: "In transit",
+      out_for_delivery: "Out for delivery",
+      ready_for_pickup: "Ready for pickup",
+      delivered: "Delivered",
+    },
+    last_mile: "Delivery",
+    problems: {
+      attempt_failed: "Delivery attempt failed",
+      rerouted: "Delivery changed",
+      held: "On hold",
+      returning: "Returning to sender",
+      returned: "Returned to sender",
+      cancelled: "Cancelled",
+      expired: "Not collected in time",
+    },
   },
   el: {
     title: "Αποστολές",
@@ -101,10 +118,32 @@ const STRINGS = {
     copied: "Ο αριθμός αντιγράφηκε",
     copy_failed: "Δεν ήταν δυνατή η αντιγραφή",
     open_site: (courier) => `Παρακολούθηση στη σελίδα της εταιρείας${courier ? ` (${courier})` : ""}`,
+    stages: {
+      created: "Δημιουργήθηκε",
+      in_transit: "Σε μεταφορά",
+      out_for_delivery: "Προς παράδοση",
+      ready_for_pickup: "Για παραλαβή",
+      delivered: "Παραδόθηκε",
+    },
+    last_mile: "Παράδοση",
+    problems: {
+      attempt_failed: "Αποτυχημένη απόπειρα παράδοσης",
+      rerouted: "Αλλαγή παράδοσης",
+      held: "Σε αναμονή",
+      returning: "Επιστρέφει στον αποστολέα",
+      returned: "Επιστράφηκε στον αποστολέα",
+      cancelled: "Ακυρώθηκε",
+      expired: "Δεν παραλήφθηκε εγκαίρως",
+    },
   },
 };
 
 const CATEGORY_ORDER = { in_transit: 0, created: 1, unknown: 2, error: 2, delivered: 3 };
+// Progress bar: the last mile is either to the door or to a locker/store (step 3)
+const STAGE_STEPS = { created: 1, in_transit: 2, out_for_delivery: 3, ready_for_pickup: 3, delivered: 4 };
+const BAR_STEPS = 4;
+// Problems that end the trip are shown in red, the others in orange
+const FINAL_PROBLEMS = new Set(["returning", "returned", "cancelled", "expired"]);
 const GREEK = /[Ͱ-Ͽἀ-῿]/;
 
 const STYLES = `
@@ -135,7 +174,16 @@ const STYLES = `
   .bar i { flex: 1; height: 4px; border-radius: 2px; background: var(--divider-color); }
   .bar i.on { background: var(--primary-color); }
   .bar i.done { background: var(--success-color, #43a047); }
+  .bar i.warn { background: var(--warning-color, #ffa600); }
+  .bar i.bad { background: var(--error-color, #db4437); }
   .bar.pending i { animation: pulse 1.4s ease-in-out infinite; }
+  .steps { display: flex; gap: 4px; margin-top: 4px; font-size: 11px; color: var(--secondary-text-color); }
+  .steps span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .steps span.current { color: var(--primary-text-color); font-weight: 500; }
+  .chip.warn { color: var(--warning-color, #ffa600); }
+  .chip.bad { color: var(--error-color, #db4437); }
+  .event.problem { color: var(--warning-color, #ffa600); }
+  .event.problem.bad { color: var(--error-color, #db4437); }
   @keyframes pulse { 50% { opacity: 0.35; } }
   .details, .foot { display: flex; align-items: center; gap: 4px 14px; margin-top: 8px; font-size: 13px; line-height: 20px; color: var(--secondary-text-color); }
   .details { flex-wrap: wrap; }
@@ -162,7 +210,7 @@ const STYLES = `
   button.history-toggle span { flex: 1; }
   button.history-toggle ha-icon { --mdc-icon-size: 18px; }
   .kept .row .name { cursor: default; }
-  .kept .bar i.on, .kept .bar i.done { opacity: 0.6; }
+  .kept .bar i.on, .kept .bar i.done, .kept .bar i.warn, .kept .bar i.bad { opacity: 0.6; }
   @container (max-width: 520px) {
     form { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
     form.with-owner { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
@@ -349,7 +397,9 @@ class GreekCourierTrackerCard extends HTMLElement {
       })
       .filter((shipment) => this._config.show_delivered || shipment.category !== "delivered")
       .sort((a, b) => {
-        const order = (CATEGORY_ORDER[a.category] ?? 2) - (CATEGORY_ORDER[b.category] ?? 2);
+        // Shipments with a problem first: they may need something from you
+        const rank = (s) => (s.problem && s.category !== "delivered" ? -1 : CATEGORY_ORDER[s.category] ?? 2);
+        const order = rank(a) - rank(b);
         if (order !== 0) return order;
         return (b.when?.key || "").localeCompare(a.when?.key || "");
       });
@@ -371,6 +421,9 @@ class GreekCourierTrackerCard extends HTMLElement {
       statusEl: attrs.status_el || "",
       eta: parseEta(attrs.estimated_delivery),
       category: attrs.delivered ? "delivered" : attrs.status_category || "unknown",
+      // Shipments kept by older versions have no stage: use the category
+      stage: attrs.stage || (attrs.delivered ? "delivered" : STAGE_STEPS[attrs.status_category] ? attrs.status_category : null),
+      problem: attrs.problem || null,
       place: attrs.latest_place || "",
       when: parseWhen(attrs.latest_date, attrs.latest_time),
       events: Array.isArray(attrs.events) ? attrs.events : [],
@@ -708,11 +761,31 @@ class GreekCourierTrackerCard extends HTMLElement {
     return `<span class="number">${copy}${open}</span>`;
   }
 
-  _bar(category, pending = false) {
-    const steps = { created: 1, in_transit: 2, delivered: 3 }[category] || 0;
-    const cls = category === "delivered" ? "done" : "on";
-    return `<div class="bar${pending ? " pending" : ""}">${[1, 2, 3]
-      .map((step) => `<i class="${step <= steps ? cls : ""}"></i>`)
+  /** Progress bar in 4 steps; a problem colours the step the shipment is at. */
+  _bar(stage, problem = null, pending = false) {
+    const t = this._t;
+    const reached = STAGE_STEPS[stage] || 0;
+    const final = FINAL_PROBLEMS.has(problem);
+    const cls = (step) => {
+      if (step > reached) return "";
+      if (stage === "delivered") return "done";
+      if (final) return "bad";
+      return problem && step === reached ? "warn" : "on";
+    };
+    const label = [t.stages[stage], t.problems[problem]].filter(Boolean).join(" · ");
+    const aria = label ? ` role="img" aria-label="${escapeHtml(`${label} (${reached}/${BAR_STEPS})`)}" title="${escapeHtml(label)}"` : "";
+    return `<div class="bar${pending ? " pending" : ""}"${aria}>${Array.from({ length: BAR_STEPS }, (_, index) =>
+      `<i class="${cls(index + 1)}"></i>`).join("")}</div>`;
+  }
+
+  /** Names of the steps under the bar; the third is the door or the locker/store. */
+  _stepLabels(stage) {
+    const t = this._t;
+    const reached = STAGE_STEPS[stage] || 0;
+    const lastMile = stage === "out_for_delivery" || stage === "ready_for_pickup" ? t.stages[stage] : t.last_mile;
+    const names = [t.stages.created, t.stages.in_transit, lastMile, t.stages.delivered];
+    return `<div class="steps" aria-hidden="true">${names
+      .map((name, index) => `<span class="${index + 1 === reached ? "current" : ""}">${escapeHtml(name)}</span>`)
       .join("")}</div>`;
   }
 
@@ -727,7 +800,7 @@ class GreekCourierTrackerCard extends HTMLElement {
       <div class="row">
         <div class="head"><span class="name">${escapeHtml(pending.name)}</span></div>
         <div class="status muted">${escapeHtml(t.searching)}</div>
-        ${this._bar("unknown", true)}
+        ${this._bar(null, null, true)}
         <div class="foot"><div class="ids">${this._numberTag(number)}</div></div>
       </div>`);
 
@@ -792,7 +865,12 @@ class GreekCourierTrackerCard extends HTMLElement {
 
     const chip = (icon, text) =>
       `<span class="chip" title="${escapeHtml(text)}"><ha-icon icon="${icon}"></ha-icon><span>${escapeHtml(text)}</span></span>`;
+    const problemText = !delivered && s.problem ? t.problems[s.problem] : "";
+    const problemChip = problemText
+      ? `<span class="chip ${FINAL_PROBLEMS.has(s.problem) ? "bad" : "warn"}" title="${escapeHtml(problemText)}"><ha-icon icon="mdi:alert-circle-outline"></ha-icon><span>${escapeHtml(problemText)}</span></span>`
+      : "";
     const details = [
+      problemChip,
       delivered && s.courierName ? chip("mdi:truck-outline", s.courierName) : "",
       s.place ? chip("mdi:map-marker-outline", s.place) : "",
       s.when ? chip("mdi:clock-outline", s.when.label) : "",
@@ -815,7 +893,8 @@ class GreekCourierTrackerCard extends HTMLElement {
           const when = parseWhen(event.date, event.time);
           const parts = [when ? `<span class="when">${escapeHtml(when.label)}</span>` : "", escapeHtml(this._eventText(event))];
           if (event.location) parts.push(`<span class="when">${escapeHtml(event.location)}</span>`);
-          return `<div class="event">${parts.filter(Boolean).join(" · ")}</div>`;
+          const problem = event.problem ? ` problem${FINAL_PROBLEMS.has(event.problem) ? " bad" : ""}` : "";
+          return `<div class="event${problem}">${parts.filter(Boolean).join(" · ")}</div>`;
         }).join("")}</div>`
       : "";
 
@@ -830,7 +909,8 @@ class GreekCourierTrackerCard extends HTMLElement {
           ${badge}
         </div>
         ${delivered ? "" : `<div class="status${muted ? " muted" : ""}">${escapeHtml(statusText)}</div>`}
-        ${this._bar(s.category)}
+        ${this._bar(s.stage, delivered ? null : s.problem)}
+        ${expanded ? this._stepLabels(s.stage) : ""}
         ${details ? `<div class="details">${details}</div>` : ""}
         <div class="foot"><div class="ids">${ids}</div><div class="actions">${actions}</div></div>
         ${timeline}

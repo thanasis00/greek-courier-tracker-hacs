@@ -191,5 +191,18 @@
         }
       }
     }
+  },
+  "issues": {
+    "blueprint_outdated": {
+      "title": "Νέα έκδοση του blueprint ειδοποιήσεων αποστολών",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Ενημέρωση του blueprint ειδοποιήσεων",
+            "description": "Βγήκε η έκδοση {version} του blueprint «Greek Courier Tracker - shipment updates». Έχεις παλιότερη: {files}.\n\n**Τι αλλάζει:**\n{changes}\n\nΗ Υποβολή αντικαθιστά το blueprint με τη νέα έκδοση και ξαναφορτώνει τους αυτοματισμούς που το χρησιμοποιούν. Οι ρυθμίσεις τους μένουν ίδιες. Αλλαγές που έχεις κάνει στο ίδιο το αρχείο του blueprint θα χαθούν."
+          }
+        }
+      }
+    }
   }
 }

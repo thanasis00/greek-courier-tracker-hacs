@@ -13,7 +13,18 @@ import aiohttp
 import async_timeout
 
 from ..const import CourierType
-from .base import BaseCourier, TrackingEvent, TrackingResult
+from .base import (
+    PROBLEM_ATTEMPT_FAILED,
+    STAGE_CREATED,
+    STAGE_DELIVERED,
+    STAGE_IN_TRANSIT,
+    STAGE_OUT_FOR_DELIVERY,
+    STAGE_READY_FOR_PICKUP,
+    BaseCourier,
+    TrackingEvent,
+    TrackingResult,
+    stage_category,
+)
 
 
 class GenikiCourier(BaseCourier):
@@ -39,6 +50,11 @@ class GenikiCourier(BaseCourier):
     RECEIVE_STATUSES = {"C_W3", "C_A1", "C_K8"}
     DELIVERY_STATUSES = {"C_W2", "C_P1", "C_S2"}
     CANCEL_STATUSES = {"C_E2", "C_L2", "C_K9", "C_P4", "C_S5", "C_S8"}
+    # Shown as a problem on the website when the latest event has one of them
+    ERROR_STATUSES = {
+        "C_EA_AG", "C_EA_AK", "C_EA_AP", "C_EA_AS", "C_EA_DA", "C_EA_DD",
+        "C_EA_DP", "C_EA_EP", "C_EA_KS", "C_EA_LA", "C_EA_LD",
+    }
     # An event followed by its cancelling event is hidden, as on the website
     CANCEL_PAIRS = [("C_L1", "C_L2"), ("C_E1", "C_E2"), ("C_K8", "C_K9")]
 
@@ -200,7 +216,6 @@ class GenikiCourier(BaseCourier):
 
         hidden = self._cancelled_indices(checkpoints)
         events = []
-        codes = []
 
         for index, checkpoint in enumerate(checkpoints):
             if index in hidden:
@@ -210,21 +225,23 @@ class GenikiCourier(BaseCourier):
             status_en = (checkpoints_en[index].get("Status") or "").strip() if checkpoints_en else ""
             date_part, time_part = self._split_timestamp(checkpoint.get("StatusDate") or "")
 
-            events.append(TrackingEvent(
+            event = TrackingEvent(
                 date=date_part,
                 time=time_part,
                 location=(checkpoint.get("Shop") or "").strip(),
                 status=status,
                 status_translated=status_en or self.translate_status(status, self.STATUS_TRANSLATIONS),
-            ))
-            codes.append(checkpoint.get("StatusCode") or "")
+            )
+            code = checkpoint.get("StatusCode") or ""
+            event.stage, event.problem = self._classify_code(code, event)
+            events.append(event)
 
         # API returns events oldest first; keep newest first like the other couriers
         events.reverse()
-        codes.reverse()
 
         latest = events[0] if events else None
         status = latest.status_translated if latest else "Unknown"
+        stage, problem = self.progress(events)
 
         return TrackingResult(
             success=True,
@@ -232,10 +249,12 @@ class GenikiCourier(BaseCourier):
             courier=self.COURIER_CODE,
             courier_name=self.COURIER_NAME,
             status=status,
-            status_category=self._get_category(codes),
+            status_category=stage_category(stage),
             events=events,
             latest_event=latest,
             raw_data=data,
+            stage=stage,
+            problem=problem,
         )
 
     def _cancelled_indices(self, checkpoints: list[dict[str, Any]]) -> set[int]:
@@ -253,15 +272,24 @@ class GenikiCourier(BaseCourier):
 
         return hidden
 
-    def _get_category(self, codes: list[str]) -> str:
-        """Determine the status category from the status codes."""
-        if not codes:
-            return "unknown"
-        if any(code in self.DELIVERY_STATUSES and code not in self.CANCEL_STATUSES for code in codes):
-            return "delivered"
-        if all(code in self.CREATE_STATUSES for code in codes):
-            return "created"
-        return "in_transit"
+    def _classify_code(self, code: str, event: TrackingEvent) -> tuple[str | None, str | None]:
+        """Stage and problem of an event: the code says how far, the text what went wrong."""
+        if code in self.CANCEL_STATUSES:
+            # It undoes an earlier event; it says nothing of its own
+            return None, None
+        text_stage, problem = self.classify(event.status, event.status_translated)
+        last_mile = text_stage if text_stage in (STAGE_OUT_FOR_DELIVERY, STAGE_READY_FOR_PICKUP) else None
+        if code in self.ERROR_STATUSES:
+            return last_mile, problem or PROBLEM_ATTEMPT_FAILED
+        if code in self.DELIVERY_STATUSES:
+            return STAGE_DELIVERED, None
+        if code in self.CREATE_STATUSES:
+            return STAGE_CREATED, None
+        if code in self.RECEIVE_STATUSES:
+            return STAGE_IN_TRANSIT, problem
+        # Every other code is on the way; only the code tells creation or delivery,
+        # the text may tell the last mile
+        return last_mile or STAGE_IN_TRANSIT, problem
 
     def _split_timestamp(self, timestamp: str) -> tuple[str, str]:
         """Convert a .NET style timestamp to local (Athens) date and time strings."""

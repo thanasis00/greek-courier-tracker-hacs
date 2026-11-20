@@ -1,0 +1,80 @@
+blueprint:
+  name: Greek Courier Tracker - shipment updates
+  description: >
+    Sends a notification to your phones when a tracked shipment changes status
+    (in Greek or English, following your Home Assistant language).
+    Every shipment has an owner: the person who added it, or whoever you pick
+    in the card or in Configure. Turn on "Only their own shipments" so each
+    phone only gets the shipments of the person signed in to the Companion app
+    on it. Shared shipments, without an owner, go to every phone.
+    Version 3.
+  domain: automation
+  source_url: https://github.com/thanasis00/greek-courier-tracker-hacs/blob/main/blueprints/automation/greek_courier_tracker/shipment_status_notification.yaml
+  input:
+    notify_device:
+      name: Phones to notify
+      description: Devices with the Home Assistant Companion app.
+      selector:
+        device:
+          integration: mobile_app
+          multiple: true
+    only_own:
+      name: Only their own shipments
+      description: >
+        Each phone only gets the shipments owned by the person signed in to the
+        Companion app on it. Shared shipments still go to every phone.
+      default: false
+      selector:
+        boolean:
+    only_delivered:
+      name: Only when delivered
+      description: Notify only when a shipment is delivered.
+      default: false
+      selector:
+        boolean:
+    notify_problems:
+      name: Also when something goes wrong
+      description: >
+        With "Only when delivered" on, still notify when a delivery attempt
+        fails, the shipment is returned or cancelled, or the delivery changes.
+      default: true
+      selector:
+        boolean:
+
+mode: queued
+max: 10
+
+trigger:
+  - platform: event
+    event_type: greek_courier_tracker_status_changed
+
+variables:
+  only_delivered: !input only_delivered
+  notify_problems: !input notify_problems
+  # A new problem (older automations' events have no problem fields)
+  new_problem: >-
+    {{ trigger.event.data.get('problem') is not none
+       and trigger.event.data.get('problem') != trigger.event.data.get('old_problem') }}
+  only_own: !input only_own
+  phones: !input notify_device
+  # Automations made before several phones were allowed hold a single device
+  targets: >-
+    {%- set phones = [phones] if phones is string else phones -%}
+    {%- set owner_phones = trigger.event.data.get('owner_device_ids') -%}
+    {{ phones | select('in', owner_phones) | list if only_own and owner_phones is not none else phones }}
+
+condition:
+  - condition: template
+    value_template: "{{ not only_delivered or trigger.event.data.delivered or (notify_problems and new_problem) }}"
+
+action:
+  - repeat:
+      for_each: "{{ targets }}"
+      sequence:
+        # The Companion app's notify action is named after the phone
+        - service: "notify.{{ ('mobile_app_' ~ device_attr(repeat.item, 'name')) | slugify }}"
+          continue_on_error: true
+          data:
+            title: "📦 {{ trigger.event.data.name }}"
+            message: >
+              {% if trigger.event.data.get('problem_text') %}⚠️ {{ trigger.event.data.problem_text }}: {% endif %}{{ trigger.event.data.status }} ({{ trigger.event.data.courier_name }}{% if trigger.event.data.location %}, {{ trigger.event.data.location }}{% endif %})
